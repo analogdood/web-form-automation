@@ -38,19 +38,56 @@ class FormFiller:
         try:
             logger.info(f"Filling form with {len(batch_data)} sets")
             
-            for set_index, set_data in enumerate(batch_data):
-                if set_index >= Config.MAX_SETS_PER_BATCH:
-                    logger.warning(f"Reached maximum sets per batch ({Config.MAX_SETS_PER_BATCH})")
-                    break
-                
-                success = self._fill_single_set(set_data, set_index)
-                if not success:
-                    logger.error(f"Failed to fill set {set_index + 1}")
-                    return False
-                
-                logger.info(f"Successfully filled set {set_index + 1}/{len(batch_data)}")
+            # Process by games (rows) first, then sets (columns)
+            num_games = Config.MAX_GAMES_PER_SET
+            num_sets = len(batch_data)
             
-            logger.info("All sets filled successfully")
+            logger.info(f"Configuration: MAX_GAMES_PER_SET = {num_games}, batch contains {num_sets} sets")
+            logger.info(f"Will process games 0 to {num_games-1} (total: {num_games} games)")
+            
+            for game_index in range(num_games):
+                logger.info(f"Processing game {game_index + 1}/{num_games}")
+                
+                for set_index in range(num_sets):
+                    if set_index >= Config.MAX_SETS_PER_BATCH:
+                        logger.warning(f"Reached maximum sets per batch ({Config.MAX_SETS_PER_BATCH})")
+                        break
+                    
+                    # CSV: rows=sets, columns=games | Form: rows=games, columns=sets
+                    # batch_data[set_index] = one CSV row (one set's 13 game values)
+                    # We need: batch_data[set_index][game_index] but only for first 10 games
+                    if game_index >= len(batch_data[set_index]):
+                        logger.error(f"CSV doesn't have game {game_index + 1} (only {len(batch_data[set_index])} games)")
+                        return False
+                    
+                    # Form supports 13 games as user confirmed
+                        
+                    csv_value = batch_data[set_index][game_index]
+                    
+                    # Convert CSV values to voting page values
+                    # CSV: 1=ホーム勝ち, 0=引き分け, 2=アウェイ勝ち  
+                    # Page: 0=ホーム勝ち, 1=引き分け, 2=アウェイ勝ち
+                    if csv_value == 1:
+                        vote_value = 0  # ホーム勝ち
+                    elif csv_value == 0:
+                        vote_value = 1  # 引き分け
+                    elif csv_value == 2:
+                        vote_value = 2  # アウェイ勝ち
+                    else:
+                        logger.error(f"Invalid CSV value: {csv_value}, expected 0, 1, or 2")
+                        return False
+                    
+                    success = self._click_checkbox(game_index, set_index, vote_value)
+                    if not success:
+                        logger.error(f"Failed to click checkbox for game {game_index + 1}, set {set_index + 1}, value {vote_value}")
+                        return False
+                    
+                    # Small delay between clicks
+                    time.sleep(0.1)
+                
+                logger.info(f"Successfully filled game {game_index + 1}")
+            
+            logger.info("All games filled successfully")
             return True
             
         except Exception as e:
@@ -73,6 +110,7 @@ class FormFiller:
                 logger.error(f"Invalid set data length: {len(set_data)}, expected {Config.MAX_GAMES_PER_SET}")
                 return False
             
+            # Process each game (row) for this set (column)
             for game_index, vote_value in enumerate(set_data):
                 if vote_value not in Config.VALID_VALUES:
                     logger.error(f"Invalid vote value: {vote_value}, expected one of {Config.VALID_VALUES}")
@@ -83,8 +121,8 @@ class FormFiller:
                     logger.error(f"Failed to click checkbox for game {game_index + 1}, set {set_index + 1}, value {vote_value}")
                     return False
                 
-                # Small delay between clicks to avoid issues
-                time.sleep(0.1)
+                # Small delay between clicks
+                time.sleep(0.2)
             
             return True
             
@@ -112,6 +150,8 @@ class FormFiller:
             checkbox = self._find_checkbox_by_name(checkbox_name)
             if not checkbox:
                 logger.error(f"Checkbox not found: {checkbox_name}")
+                # Debug: Take screenshot and inspect page elements
+                self._debug_page_elements(game_index, set_index, vote_value)
                 return False
             
             # Click the checkbox
@@ -137,30 +177,12 @@ class FormFiller:
         Returns:
             str: Checkbox name attribute
         """
-        # Handle special cases for games 11 and 12 (indexes 10 and 11)
-        if game_index <= 9:
-            # Standard pattern: chkbox_{game}_{set}_{value}
-            return Config.CHECKBOX_PATTERNS['standard'].format(
-                game=game_index, 
-                set=set_index, 
-                value=vote_value
-            )
-        elif game_index == 10:
-            # Game 11: chkbox_1_{set}_{value}
-            return Config.CHECKBOX_PATTERNS['game_11'].format(
-                set=set_index, 
-                value=vote_value
-            )
-        elif game_index == 11:
-            # Game 12: chkbox_2_{set}_{value}
-            return Config.CHECKBOX_PATTERNS['game_12'].format(
-                set=set_index, 
-                value=vote_value
-            )
-        else:
-            # Game 13 (index 12) - skip for now
-            logger.warning(f"Game 13 (index {game_index}) not supported yet")
-            return f"chkbox_unknown_{game_index}_{set_index}_{vote_value}"
+        # Correct pattern: chkbox_{set}_{game}_{value} (set and game were swapped!)
+        return Config.CHECKBOX_PATTERNS['standard'].format(
+            game=set_index,    # セット番号が最初
+            set=game_index,    # 試合番号が2番目  
+            value=vote_value
+        )
     
     def _find_checkbox_by_name(self, checkbox_name: str) -> Optional[object]:
         """
@@ -216,31 +238,49 @@ class FormFiller:
                 logger.debug(f"Checkbox {checkbox_name} is already selected")
                 return True
             
-            # Wait for element to be clickable
-            self.wait.until(EC.element_to_be_clickable(checkbox_element))
-            
-            # Click the checkbox
-            checkbox_element.click()
-            
-            # Verify it was clicked
-            if checkbox_element.is_selected():
-                return True
-            else:
-                logger.warning(f"Checkbox {checkbox_name} click did not register")
-                return False
-                
-        except ElementNotInteractableException:
-            # Try JavaScript click as fallback
+            # Scroll element into view first
             try:
-                self.driver.execute_script("arguments[0].click();", checkbox_element)
-                logger.debug(f"Used JavaScript click for {checkbox_name}")
-                return checkbox_element.is_selected()
+                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", checkbox_element)
+                time.sleep(0.2)  # Wait for scroll to complete
             except Exception as e:
-                logger.error(f"JavaScript click failed for {checkbox_name}: {e}")
-                return False
+                logger.debug(f"Scroll failed for {checkbox_name}: {e}")
+            
+            # Try direct click first (faster approach)
+            try:
+                checkbox_element.click()
+                logger.debug(f"Direct click successful for {checkbox_name}")
+                
+                # Verify it was clicked
+                if checkbox_element.is_selected():
+                    return True
+                else:
+                    logger.warning(f"Checkbox {checkbox_name} direct click did not register")
+                    
+            except Exception as click_error:
+                logger.debug(f"Direct click failed for {checkbox_name}: {click_error}")
+                # Try JavaScript click immediately
+                try:
+                    self.driver.execute_script("arguments[0].click();", checkbox_element)
+                    logger.debug(f"JavaScript click successful for {checkbox_name}")
+                    
+                    # Verify it was clicked
+                    if checkbox_element.is_selected():
+                        return True
+                    else:
+                        logger.warning(f"Checkbox {checkbox_name} JavaScript click did not register")
+                        return False
+                except Exception as js_error:
+                    logger.debug(f"JavaScript click also failed for {checkbox_name}: {js_error}")
+                    # Last resort: try with wait
+                    try:
+                        self.wait.until(EC.element_to_be_clickable(checkbox_element))
+                        checkbox_element.click()
+                        return checkbox_element.is_selected()
+                    except:
+                        return False
                 
         except Exception as e:
-            logger.error(f"Error clicking checkbox {checkbox_name}: {e}")
+            logger.error(f"All click methods failed for {checkbox_name}: {e}")
             return False
     
     def submit_form(self) -> bool:
@@ -252,6 +292,15 @@ class FormFiller:
         """
         try:
             logger.info("Attempting to submit form")
+            
+            # Debug: Find all potential submit buttons
+            all_buttons = self.driver.find_elements(By.CSS_SELECTOR, "button, input[type='submit'], input[type='button']")
+            logger.info(f"Found {len(all_buttons)} potential submit buttons:")
+            for i, btn in enumerate(all_buttons[:10]):
+                btn_text = btn.get_attribute('value') or btn.text or 'no-text'
+                btn_type = btn.get_attribute('type') or 'no-type'
+                btn_onclick = btn.get_attribute('onclick') or 'no-onclick'
+                logger.info(f"  Button {i}: text='{btn_text}', type='{btn_type}', onclick='{btn_onclick}'")
             
             success = self.driver_manager.click_element_safe(
                 Config.SELECTORS['submit_button'], 
@@ -349,3 +398,73 @@ class FormFiller:
         except Exception as e:
             logger.error(f"Error getting form status: {e}")
             return {"error": str(e)}
+    
+    def _debug_page_elements(self, game_index: int, set_index: int, vote_value: int):
+        """Debug function to inspect page elements when checkbox is not found"""
+        try:
+            # Take screenshot
+            timestamp = int(time.time())
+            screenshot_file = f"debug_checkbox_error_{timestamp}.png"
+            self.driver.save_screenshot(screenshot_file)
+            logger.info(f"Debug screenshot saved: {screenshot_file}")
+            
+            # Log page information
+            logger.info(f"Current URL: {self.driver.current_url}")
+            logger.info(f"Page title: {self.driver.title}")
+            
+            # Find all checkboxes on the page
+            all_checkboxes = self.driver.find_elements(By.CSS_SELECTOR, "input[type='checkbox']")
+            logger.info(f"Total checkboxes found on page: {len(all_checkboxes)}")
+            
+            # Find all unique game indices from checkbox names
+            game_indices = set()
+            for cb in all_checkboxes:
+                name = cb.get_attribute('name') or 'no-name'
+                if name.startswith('chkbox_'):
+                    try:
+                        parts = name.split('_')
+                        if len(parts) >= 2:
+                            game_index = int(parts[1])
+                            game_indices.add(game_index)
+                    except:
+                        pass
+            
+            sorted_games = sorted(game_indices)
+            logger.info(f"Actual game indices found on page: {sorted_games}")
+            logger.info(f"Total games available: {len(sorted_games)}")
+            
+            # Check 390 checkboxes structure
+            total_checkboxes = len(all_checkboxes)
+            if total_checkboxes == 390:
+                games_calculated = total_checkboxes // (3 * 10)  # 3 choices * 10 sets
+                logger.info(f"Calculated games from 390 checkboxes: {games_calculated}")
+            
+            # Show sample checkboxes for each game found
+            for game_idx in sorted_games[:5]:  # First 5 games
+                sample_cb = self.driver.find_elements(By.CSS_SELECTOR, f"input[name^='chkbox_{game_idx}_']")
+                logger.info(f"Game {game_idx}: found {len(sample_cb)} checkboxes")
+            
+            # Try to find checkboxes with similar patterns
+            similar_patterns = [
+                f"chkbox_{game_index}_{set_index}_{vote_value}",
+                f"checkbox_{game_index}_{set_index}_{vote_value}", 
+                f"chk_{game_index}_{set_index}_{vote_value}",
+                f"game{game_index}_set{set_index}_val{vote_value}"
+            ]
+            
+            # Search for any checkbox containing the game index
+            logger.info(f"Searching for any checkbox containing game index {game_index}...")
+            all_checkboxes_with_game = self.driver.find_elements(By.CSS_SELECTOR, f"input[type='checkbox'][name*='chkbox_{game_index}_']")
+            logger.info(f"Found {len(all_checkboxes_with_game)} checkboxes with game index {game_index}")
+            
+            for i, cb in enumerate(all_checkboxes_with_game[:5]):
+                name = cb.get_attribute('name') or 'no-name'
+                logger.info(f"  Game {game_index} checkbox {i}: name='{name}'")
+            
+            for pattern in similar_patterns:
+                elements = self.driver.find_elements(By.NAME, pattern)
+                if elements:
+                    logger.info(f"Found elements with pattern '{pattern}': {len(elements)}")
+                    
+        except Exception as debug_e:
+            logger.error(f"Error in debug function: {debug_e}")

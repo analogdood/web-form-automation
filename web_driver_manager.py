@@ -93,8 +93,31 @@ class WebDriverManager:
         options = webdriver.edge.options.Options()
         if self.headless:
             options.add_argument("--headless")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
         
-        service = webdriver.edge.service.Service(EdgeChromiumDriverManager().install())
+        try:
+            # Try to download EdgeDriver
+            service = webdriver.edge.service.Service(EdgeChromiumDriverManager().install())
+        except Exception as e:
+            logger.warning(f"Failed to auto-download EdgeDriver: {e}")
+            logger.info("Attempting to use system EdgeDriver...")
+            # Try to use system-installed EdgeDriver
+            try:
+                service = webdriver.edge.service.Service()
+                self.driver = webdriver.Edge(service=service, options=options)
+                return
+            except Exception as system_err:
+                logger.error(f"System EdgeDriver also failed: {system_err}")
+                logger.info("Edge WebDriver unavailable, falling back to Chrome...")
+                # Fallback to Chrome if Edge fails
+                try:
+                    self._setup_chrome_driver()
+                    return
+                except Exception as chrome_err:
+                    raise Exception(f"All WebDriver options failed. Edge auto-download: {e}, Edge system: {system_err}, Chrome fallback: {chrome_err}")
+        
         self.driver = webdriver.Edge(service=service, options=options)
     
     def navigate_to_url(self, url: str) -> bool:

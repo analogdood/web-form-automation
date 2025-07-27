@@ -12,12 +12,12 @@ class Config:
     HEADLESS_MODE = False
     
     # Browser settings
-    BROWSER = "chrome"  # chrome, firefox, edge
+    BROWSER = "edge"  # chrome, firefox, edge
     WINDOW_SIZE = (1920, 1080)
     
-    # Form processing settings
-    MAX_SETS_PER_BATCH = 10
-    MAX_GAMES_PER_SET = 13
+    # Form processing settings - 13 games × 10 sets (trusting user input over debug)
+    MAX_SETS_PER_BATCH = 10  # 10 sets (0-9)
+    MAX_GAMES_PER_SET = 13   # 13 games (0-12) - user confirms 13 games exist
     RETRY_ATTEMPTS = 3
     RETRY_DELAY = 1
     
@@ -25,7 +25,8 @@ class Config:
     CHECKBOX_PATTERNS = {
         'standard': 'chkbox_{game}_{set}_{value}',
         'game_11': 'chkbox_1_{set}_{value}',
-        'game_12': 'chkbox_2_{set}_{value}'
+        'game_12': 'chkbox_2_{set}_{value}',
+        'game_13': 'chkbox_{game}_{set}_{value}'  # Same as standard pattern
     }
     
     # Element selectors (fallback options)
