@@ -47,9 +47,14 @@ class EnhancedAutomationSystem:
         self.action_player = None
         self.action_file_manager = ActionFileManager()
         
+        # Batch data (can be set externally)
+        self.batch_data = None
+        
         # Processing state
         self.current_batch = 0
         self.total_batches = 0
+        self.form_input_ready = False  # Flag to control form input start
+        self.voting_page_reached = False
         self.processing_stats = {
             "total_sets": 0,
             "processed_sets": 0,
@@ -80,6 +85,29 @@ class EnhancedAutomationSystem:
         # Set specific logger levels
         logging.getLogger("selenium").setLevel(logging.WARNING)
         logging.getLogger("urllib3").setLevel(logging.WARNING)
+    
+    def set_batch_data(self, batch_data: List[List[int]]):
+        """
+        Set specific batch data to process instead of loading from CSV
+        
+        Args:
+            batch_data: List of sets (each set is a list of 13 values)
+        """
+        self.batch_data = batch_data
+        self.logger.info(f"Batch data set: {len(batch_data)} sets")
+    
+    def start_form_input(self):
+        """Signal that form input can begin"""
+        self.form_input_ready = True
+        self.logger.info("Form input authorized - processing will continue")
+    
+    def is_voting_page_ready(self) -> bool:
+        """Check if voting page is reached and ready for input"""
+        return self.voting_page_reached
+    
+    def is_form_input_ready(self) -> bool:
+        """Check if form input is authorized to start"""
+        return self.form_input_ready
     
     def run_automation(self) -> bool:
         """
@@ -164,7 +192,7 @@ class EnhancedAutomationSystem:
             self.logger.error("Action file is required for execute mode")
             return False
         
-        # Load CSV data
+        # Load data (from batch or CSV)
         if not self._load_data():
             return False
         
@@ -187,11 +215,11 @@ class EnhancedAutomationSystem:
         """Run automation in basic mode (original functionality)"""
         self.logger.info("Starting basic mode")
         
-        if not self.csv_path:
-            self.logger.error("CSV file path is required for basic mode")
+        if not self.csv_path and not self.batch_data:
+            self.logger.error("CSV file path or batch data is required for basic mode")
             return False
         
-        # Load data
+        # Load data (from batch or CSV)
         if not self._load_data():
             return False
         
@@ -223,9 +251,20 @@ class EnhancedAutomationSystem:
         return True
     
     def _load_data(self) -> bool:
-        """Load and validate CSV data"""
-        self.logger.info("Loading CSV data...")
+        """Load and validate data (from batch or CSV)"""
+        if self.batch_data:
+            self.logger.info(f"Using pre-loaded batch data: {len(self.batch_data)} sets")
+            # Create a temporary data handler for validation
+            if self.csv_path:
+                self.data_handler = DataHandler(self.csv_path)
+            self.processing_stats["total_sets"] = len(self.batch_data)
+            return True
         
+        if not self.csv_path:
+            self.logger.error("No CSV path or batch data available")
+            return False
+        
+        self.logger.info("Loading CSV data...")
         self.data_handler = DataHandler(self.csv_path)
         if not self.data_handler.load_csv_data():
             self.logger.error("Failed to load CSV data")
@@ -274,8 +313,15 @@ class EnhancedAutomationSystem:
         """Process CSV data with recorded actions"""
         self.logger.info("Starting enhanced batch processing with recorded actions")
         
-        # Split data into batches
-        batches = self.data_handler.split_data_into_batches()
+        # Get data batches
+        if self.batch_data:
+            # Use pre-loaded batch data (single batch)
+            batches = [self.batch_data]
+            self.logger.info(f"Using pre-loaded batch data as single batch")
+        else:
+            # Split data into batches
+            batches = self.data_handler.split_data_into_batches()
+        
         if not batches:
             self.logger.error("No data batches to process")
             return False
@@ -318,7 +364,13 @@ class EnhancedAutomationSystem:
     
     def _process_data_batches(self) -> bool:
         """Process data batches using original method (basic mode)"""
-        batches = self.data_handler.split_data_into_batches()
+        if self.batch_data:
+            # Use pre-loaded batch data (single batch)
+            batches = [self.batch_data]
+            self.logger.info(f"Using pre-loaded batch data as single batch")
+        else:
+            # Use data handler to split CSV into batches
+            batches = self.data_handler.split_data_into_batches()
         
         if not batches:
             self.logger.error("No data batches to process")
@@ -455,8 +507,12 @@ class EnhancedAutomationSystem:
                     except:
                         pass
                     
-                    self.logger.info("Starting automatic form filling...")
-                    return True
+                    # Mark voting page as reached
+                    self.voting_page_reached = True
+                    self.logger.info("✅ Voting page ready - waiting for user to start form input via GUI...")
+                    
+                    # Wait for user to authorize form input via GUI
+                    return self._wait_for_form_input_authorization()
                 
                 # Show current page info
                 if attempt % 10 == 0:  # Every 10 seconds
@@ -469,6 +525,20 @@ class EnhancedAutomationSystem:
                 self.logger.error(f"Error checking page: {e}")
                 
         self.logger.error("❌ Timeout waiting for voting page")
+        return False
+    
+    def _wait_for_form_input_authorization(self) -> bool:
+        """Wait for user to authorize form input via GUI"""
+        self.logger.info("Waiting for user to click 'Start Form Input' button in GUI...")
+        
+        max_wait = 300  # 5 minutes max wait
+        for _ in range(max_wait):
+            if self.form_input_ready:
+                self.logger.info("✅ Form input authorized - starting form filling...")
+                return True
+            time.sleep(1)
+        
+        self.logger.error("❌ Timeout waiting for form input authorization")
         return False
     
     def get_status(self) -> Dict[str, Any]:

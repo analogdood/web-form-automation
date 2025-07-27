@@ -285,31 +285,233 @@ class FormFiller:
     
     def submit_form(self) -> bool:
         """
-        Submit the voting form
+        Submit the voting form (add to cart)
         
         Returns:
             bool: True if successful, False otherwise
         """
         try:
-            logger.info("Attempting to submit form")
+            logger.info("Attempting to submit form (add to cart)")
             
-            # Debug: Find all potential submit buttons
-            all_buttons = self.driver.find_elements(By.CSS_SELECTOR, "button, input[type='submit'], input[type='button']")
-            logger.info(f"Found {len(all_buttons)} potential submit buttons:")
-            for i, btn in enumerate(all_buttons[:10]):
-                btn_text = btn.get_attribute('value') or btn.text or 'no-text'
-                btn_type = btn.get_attribute('type') or 'no-type'
-                btn_onclick = btn.get_attribute('onclick') or 'no-onclick'
-                logger.info(f"  Button {i}: text='{btn_text}', type='{btn_type}', onclick='{btn_onclick}'")
+            # Enhanced scrolling to ensure cart button is visible
+            try:
+                logger.info("🔄 Enhanced scrolling to find cart button...")
+                
+                # Get initial page height
+                initial_height = self.driver.execute_script("return document.body.scrollHeight")
+                logger.info(f"Initial page height: {initial_height}px")
+                
+                # Scroll to very bottom
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(2)
+                
+                # Scroll down in multiple steps to load dynamic content
+                for step in range(5):
+                    current_height = self.driver.execute_script("return document.body.scrollHeight")
+                    scroll_position = self.driver.execute_script("return window.pageYOffset")
+                    logger.info(f"Step {step+1}: Page height={current_height}px, Scroll position={scroll_position}px")
+                    
+                    # Scroll down a bit more
+                    self.driver.execute_script(f"window.scrollTo(0, {current_height + 100});")
+                    time.sleep(0.5)
+                    
+                    # Check if new content loaded
+                    new_height = self.driver.execute_script("return document.body.scrollHeight")
+                    if new_height > current_height:
+                        logger.info(f"New content loaded, height increased to {new_height}px")
+                
+                # Final scroll to absolute bottom
+                final_height = self.driver.execute_script("return document.body.scrollHeight")
+                self.driver.execute_script(f"window.scrollTo(0, {final_height});")
+                time.sleep(2)
+                
+                # Also try scrolling the document element (sometimes needed)
+                self.driver.execute_script("document.documentElement.scrollTop = document.documentElement.scrollHeight;")
+                time.sleep(1)
+                
+                final_scroll_position = self.driver.execute_script("return window.pageYOffset")
+                logger.info(f"✅ Final scroll position: {final_scroll_position}px of {final_height}px")
+                
+            except Exception as e:
+                logger.warning(f"Enhanced scrolling failed: {e}")
+                # Fallback to simple scroll
+                try:
+                    self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(1)
+                    logger.info("Fallback scroll completed")
+                except:
+                    pass
             
+            # Debug: Find all potential clickable elements including links and divs
+            all_clickables = []
+            
+            # Try different selectors to find all clickable elements
+            selectors_to_try = [
+                "button, input[type='submit'], input[type='button']",
+                "a[href], div[onclick], span[onclick]",
+                "span, div, a",  # Include all spans and divs
+                "*[onclick]",
+                "input[type='image']",
+                ".btn, .button, .cart, .add",
+                ".kounyu_cart_multiline_base",  # Specific cart button class
+                "*[class*='kounyu']",
+                "*[class*='cart']"
+            ]
+            
+            for selector in selectors_to_try:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    all_clickables.extend(elements)
+                    # Only log if we found significant elements to reduce spam
+                    if len(elements) > 10:
+                        logger.debug(f"Found {len(elements)} elements with selector: {selector}")
+                except Exception as e:
+                    logger.debug(f"Selector {selector} failed: {e}")
+            
+            # Remove duplicates
+            unique_clickables = []
+            seen_elements = set()
+            for element in all_clickables:
+                try:
+                    element_id = id(element)
+                    if element_id not in seen_elements:
+                        unique_clickables.append(element)
+                        seen_elements.add(element_id)
+                except:
+                    pass
+            
+            logger.info(f"🔍 Found {len(unique_clickables)} clickable elements, filtering for cart buttons...")
+            
+            cart_button_candidates = []
+            # Only analyze a reasonable number of elements to reduce log spam
+            elements_to_analyze = min(len(unique_clickables), 100)  # Limit to 100 elements max
+            
+            for i, btn in enumerate(unique_clickables[:elements_to_analyze]):
+                try:
+                    btn_text = btn.get_attribute('value') or btn.text or 'no-text'
+                    btn_onclick = btn.get_attribute('onclick') or 'no-onclick'
+                    btn_class = btn.get_attribute('class') or 'no-class'
+                    btn_id = btn.get_attribute('id') or 'no-id'
+                    btn_name = btn.get_attribute('name') or 'no-name'
+                    
+                    # Check if this looks like a cart button (avoid header cart links)
+                    is_cart_button = (
+                        ('追加' in btn_text or 'カート' in btn_text or 
+                         '購入' in btn_text or '申込' in btn_text or
+                         '購入カートに追加' in btn_text or
+                         'kounyu_cart' in btn_class.lower() or
+                         'cart' in btn_onclick.lower() or 'add' in btn_onclick.lower() or
+                         'buy' in btn_onclick.lower() or 'purchase' in btn_onclick.lower() or
+                         'cart' in btn_class.lower() or 'add' in btn_class.lower() or
+                         'buy' in btn_class.lower() or 'purchase' in btn_class.lower() or
+                         'cart' in btn_id.lower() or 'add' in btn_id.lower() or
+                         'buy' in btn_id.lower() or 'purchase' in btn_id.lower() or
+                         'cart' in btn_name.lower() or 'add' in btn_name.lower() or
+                         'kounyu' in btn_class.lower()) and
+                        # Exclude header navigation cart buttons
+                        not ('header' in btn_class.lower() or 'nav' in btn_class.lower() or
+                             'l-header' in btn_class.lower() or 'main-nav' in btn_class.lower())
+                    )
+                    
+                    # Only log cart button candidates to reduce log spam
+                    if is_cart_button:
+                        btn_visible = btn.is_displayed()
+                        btn_enabled = btn.is_enabled()
+                        cart_button_candidates.append((i, btn, btn_text))
+                        logger.info(f"  🎯 CART BUTTON {len(cart_button_candidates)}: '{btn_text}' (class: {btn_class}, visible: {btn_visible}, enabled: {btn_enabled})")
+                        
+                except Exception as e:
+                    logger.debug(f"Error analyzing button {i}: {e}")
+            
+            logger.info(f"🎯 Found {len(cart_button_candidates)} cart button candidates")
+            
+            # Try to find cart button first using improved method
+            cart_success = self._try_click_cart_button(cart_button_candidates)
+            
+            if cart_success:
+                logger.info("Cart button clicked successfully")
+                
+                # Immediately check for alert before any other checks
+                logger.info("Checking for immediate alert after cart button click...")
+                try:
+                    alert = self.driver.switch_to.alert
+                    alert_text = alert.text
+                    logger.info(f"✅ Found immediate alert: '{alert_text}'")
+                    alert.accept()
+                    logger.info("✅ Immediate alert accepted successfully")
+                    time.sleep(2)
+                    
+                    # Check if new window opened
+                    self._handle_new_window_after_cart_addition()
+                    
+                    # Check if we're redirected to confirmation page
+                    current_url = self.driver.current_url
+                    if "vote/confirm" in current_url or "index.html" in current_url:
+                        logger.info("✅ Redirected to confirmation/result page after alert - cart addition successful")
+                        return True
+                    
+                    logger.info("✅ Alert handled, form submission successful")
+                    return True
+                    
+                except Exception as e:
+                    logger.debug(f"No immediate alert found: {e}")
+                    
+                # Wait a moment and check if anything happened
+                time.sleep(2)
+                
+                # Check for form validation errors and detailed status (but handle alerts first)
+                try:
+                    if not self._check_form_status_after_click():
+                        logger.warning("Form validation or other issues detected")
+                        # Try to get more information about why the form submission failed
+                        self._diagnose_form_submission_failure()
+                        return False
+                except Exception as status_error:
+                    # If status check fails due to alert, try to handle alert
+                    if "unexpected alert open" in str(status_error):
+                        logger.info("Alert detected during status check - handling it now")
+                        try:
+                            alert = self.driver.switch_to.alert
+                            alert_text = alert.text
+                            logger.info(f"✅ Found alert during status check: '{alert_text}'")
+                            alert.accept()
+                            logger.info("✅ Alert accepted during status check")
+                            return True
+                        except:
+                            pass
+                    return False
+                
+                # Handle confirmation dialog
+                if self._handle_confirmation_dialog():
+                    logger.info("Form submitted successfully with cart button")
+                    
+                    # Check if we're redirected to confirmation page
+                    current_url = self.driver.current_url
+                    if "vote/confirm" in current_url or "index.html" in current_url:
+                        logger.info("✅ Redirected to confirmation/result page - cart addition successful")
+                        return True
+                    
+                    # Check if we're on cart page and need to go back
+                    if self._handle_cart_page_navigation():
+                        return True
+                    else:
+                        logger.warning("Failed to navigate back from cart page")
+                        return False
+                else:
+                    logger.warning("Cart button clicked but confirmation dialog failed")
+                    return False
+            
+            # Fallback to regular submit button
+            logger.info("Cart button not found, trying regular submit button")
             success = self.driver_manager.click_element_safe(
                 Config.SELECTORS['submit_button'], 
                 "submit button"
             )
             
             if success:
-                logger.info("Form submitted successfully")
-                # Wait for page to process
+                logger.info("Form submitted successfully with regular submit button")
+                # Handle confirmation dialog
+                self._handle_confirmation_dialog()
                 time.sleep(2)
                 return True
             else:
@@ -319,6 +521,777 @@ class FormFiller:
         except Exception as e:
             logger.error(f"Error submitting form: {e}")
             return False
+    
+    def _handle_confirmation_dialog(self) -> bool:
+        """
+        Handle confirmation dialog that appears after clicking cart button
+        
+        Returns:
+            bool: True if dialog handled successfully, False otherwise
+        """
+        try:
+            logger.info("🔍 Checking for confirmation dialog after cart button click...")
+            
+            # Wait longer for dialog to appear
+            time.sleep(3)
+            
+            # Method 1: More aggressive JavaScript alert handling
+            logger.info("Method 1: Aggressive JavaScript alert handling...")
+            for attempt in range(10):  # Try 10 times over 5 seconds
+                try:
+                    alert = self.driver.switch_to.alert
+                    alert_text = alert.text
+                    logger.info(f"✅ Found JavaScript alert (attempt {attempt + 1}): '{alert_text}'")
+                    alert.accept()  # Click OK
+                    logger.info("✅ JavaScript alert accepted (OK clicked)")
+                    time.sleep(2)
+                    return True
+                except Exception as e:
+                    if attempt < 9:  # Don't log error on last attempt
+                        logger.debug(f"Attempt {attempt + 1}: No alert yet: {e}")
+                        time.sleep(0.5)
+                    continue
+            
+            logger.info("No JavaScript alert found after 10 attempts")
+            
+            # Method 2: Immediate alert check (sometimes alerts appear instantly)
+            logger.info("Method 2: Immediate alert check...")
+            try:
+                alert = self.driver.switch_to.alert
+                alert_text = alert.text
+                logger.info(f"✅ Found immediate alert: '{alert_text}'")
+                alert.accept()
+                logger.info("✅ Immediate alert accepted")
+                time.sleep(2)
+                return True
+            except Exception as e:
+                logger.debug(f"No immediate alert: {e}")
+            
+            # Method 3: Enhanced DOM dialog search with immediate action
+            logger.info("Method 3: Enhanced DOM dialog search...")
+            
+            # Check current page state
+            current_url = self.driver.current_url
+            page_title = self.driver.title
+            logger.info(f"Current URL: {current_url}")
+            logger.info(f"Page title: {page_title}")
+            
+            # Check if we already redirected to result page
+            if "vote/confirm" in current_url or "index.html" in current_url:
+                logger.info("✅ Already redirected to confirmation/result page - dialog was likely auto-handled")
+                return True
+            
+            # Try to find and click confirmation buttons aggressively
+            confirmation_selectors = [
+                "//button[contains(text(), 'OK')]",
+                "//button[contains(text(), 'はい')]", 
+                "//button[contains(text(), '確認')]",
+                "//button[contains(text(), 'ok')]",
+                "//input[@value='OK']",
+                "//input[@value='はい']", 
+                "//input[@value='確認']",
+                "//button[@value='OK']",
+                "//button[@value='はい']",
+                "//button[@value='確認']",
+                "button[onclick*='ok']",
+                "button[onclick*='OK']",
+                "button[onclick*='confirm']",
+                ".modal button",
+                ".dialog button", 
+                ".popup button",
+                "[role='dialog'] button",
+                ".confirm-button",
+                ".ok-button",
+                "*[data-action='confirm']",
+                "*[data-action='ok']"
+            ]
+            
+            # Avoid delete/cancel buttons
+            avoid_keywords = ['削除', 'delete', '取消', 'cancel', '×', 'close', '閉じる', 'キャンセル']
+            
+            # Try each selector with multiple attempts
+            for selector in confirmation_selectors:
+                for attempt in range(3):  # 3 attempts per selector
+                    try:
+                        if selector.startswith("//"):
+                            elements = self.driver.find_elements(By.XPATH, selector)
+                        else:
+                            elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        
+                        for element in elements:
+                            if element.is_displayed() and element.is_enabled():
+                                element_text = element.text or element.get_attribute('value') or 'no-text'
+                                
+                                # Skip delete/cancel buttons
+                                if any(keyword in element_text.lower() for keyword in avoid_keywords):
+                                    logger.debug(f"Skipping avoid button: '{element_text}'")
+                                    continue
+                                
+                                # Click any visible confirmation-like button
+                                logger.info(f"Found potential OK button: '{element_text}' (selector: {selector})")
+                                try:
+                                    element.click()
+                                    logger.info(f"✅ Clicked confirmation button: '{element_text}'")
+                                    time.sleep(3)  # Wait longer after click
+                                    
+                                    # Check if URL changed (redirect to result page)
+                                    new_url = self.driver.current_url
+                                    if new_url != current_url:
+                                        logger.info(f"✅ URL changed after button click: {new_url}")
+                                        return True
+                                    
+                                    return True
+                                except Exception as click_error:
+                                    logger.debug(f"Failed to click button '{element_text}': {click_error}")
+                                    continue
+                                    
+                    except Exception as e:
+                        logger.debug(f"Selector {selector} attempt {attempt + 1} failed: {e}")
+                        if attempt < 2:  # Wait before retry
+                            time.sleep(0.5)
+                        continue
+            
+            # Method 4: Try pressing Enter key (sometimes works for dialogs)
+            logger.info("Method 4: Trying Enter key...")
+            try:
+                from selenium.webdriver.common.keys import Keys
+                # Try Enter on body
+                self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ENTER)
+                logger.info("✅ Pressed Enter key on body")
+                time.sleep(2)
+                
+                # Check if URL changed after Enter
+                new_url = self.driver.current_url
+                if new_url != current_url:
+                    logger.info(f"✅ URL changed after Enter key: {new_url}")
+                    return True
+                
+                # Try Space key as well (sometimes confirms dialogs)
+                self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.SPACE)
+                logger.info("✅ Pressed Space key")
+                time.sleep(2)
+                
+                return True
+            except Exception as e:
+                logger.info(f"Key press failed: {e}")
+            
+            # Final check - see if we're on a different page now
+            final_url = self.driver.current_url
+            if final_url != current_url:
+                logger.info(f"✅ URL changed during dialog handling: {final_url}")
+                return True
+            
+            logger.warning("⚠️ No confirmation dialog found or could not handle it")
+            return True  # Continue anyway as dialog might have been auto-handled
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling confirmation dialog: {e}")
+            return False
+    
+    def _handle_new_window_after_cart_addition(self):
+        """
+        Handle new window that might open after cart addition
+        """
+        try:
+            logger.info("🔍 Checking for new windows after cart addition...")
+            
+            # Get all window handles
+            all_windows = self.driver.window_handles
+            logger.info(f"Found {len(all_windows)} window(s)")
+            
+            if len(all_windows) > 1:
+                logger.info("✅ New window detected - handling new window")
+                
+                # Switch to the new window (usually the last one)
+                new_window = all_windows[-1]
+                original_window = all_windows[0]
+                
+                logger.info(f"Switching to new window: {new_window}")
+                self.driver.switch_to.window(new_window)
+                
+                # Wait for new window to load
+                time.sleep(3)
+                
+                # Get new window URL and title
+                new_url = self.driver.current_url
+                new_title = self.driver.title
+                logger.info(f"New window URL: {new_url}")
+                logger.info(f"New window title: {new_title}")
+                
+                # Check if it's a confirmation/result page
+                if any(keyword in new_url.lower() for keyword in ['confirm', 'result', 'cart', 'complete', 'success']):
+                    logger.info("✅ New window appears to be confirmation/result page")
+                
+                # Close the new window and return to original
+                logger.info("Closing new window and returning to original voting page...")
+                self.driver.close()
+                self.driver.switch_to.window(original_window)
+                
+                # Wait a moment for focus to return
+                time.sleep(2)
+                
+                logger.info("✅ Returned to original voting page window")
+                
+                # Check if we're still on voting page
+                current_url = self.driver.current_url
+                if "PGSPSL00001MoveSingleVoteSheet.form" in current_url:
+                    logger.info("✅ Successfully back on voting page - ready for next batch")
+                else:
+                    logger.warning(f"Not on voting page: {current_url}")
+                    
+            else:
+                logger.info("No new windows opened")
+                
+        except Exception as e:
+            logger.error(f"Error handling new window: {e}")
+            # Try to return to original window if something went wrong
+            try:
+                if len(self.driver.window_handles) > 0:
+                    self.driver.switch_to.window(self.driver.window_handles[0])
+            except:
+                pass
+    
+    def _handle_cart_page_navigation(self) -> bool:
+        """
+        Handle navigation after cart addition (return to voting page or stay for next batch)
+        
+        Returns:
+            bool: True if navigation handled successfully, False otherwise
+        """
+        try:
+            current_url = self.driver.current_url
+            logger.info(f"Current URL after cart addition: {current_url}")
+            
+            # Check if we're on cart page
+            if "cart" in current_url.lower() or "カート" in self.driver.page_source or "SPSL006" in self.driver.page_source:
+                logger.info("✅ Detected cart page - product added successfully")
+                
+                # Try multiple methods to return to voting page
+                logger.info("🔄 Attempting to return to voting page for next batch...")
+                
+                # Method 1: Look for specific links to voting page
+                try:
+                    voting_page_links = [
+                        "//a[contains(@href, 'PGSPSL00001MoveSingleVoteSheet')]",
+                        "//a[contains(text(), '投票')]",
+                        "//a[contains(text(), '予想')]",
+                        "//a[contains(text(), 'toto')]",
+                        "//a[contains(text(), '戻る')]",
+                        "//button[contains(text(), '戻る')]",
+                        "//a[contains(text(), '続けて購入')]",
+                        "//a[contains(text(), '追加')]",
+                        "//p[contains(text(), 'totoの投票を追加する')]",
+                        "//button[contains(text(), 'totoの投票を追加する')]",
+                        "//a[contains(text(), 'totoの投票を追加する')]",
+                        "//*[contains(@class, 'c-clubtoto-btn-base__text')]",
+                        ".breadcrumb a, .pankuzu a"
+                    ]
+                    
+                    for link_xpath in voting_page_links:
+                        try:
+                            if link_xpath.startswith("//"):
+                                elements = self.driver.find_elements(By.XPATH, link_xpath)
+                            else:
+                                elements = self.driver.find_elements(By.CSS_SELECTOR, link_xpath)
+                                
+                            for element in elements:
+                                if element.is_displayed() and element.is_enabled():
+                                    link_text = element.text or element.get_attribute('href') or 'no-text'
+                                    logger.info(f"Found potential return link: '{link_text}' with xpath: {link_xpath}")
+                                    element.click()
+                                    time.sleep(2)
+                                    
+                                    # Check if we're back on voting page
+                                    new_url = self.driver.current_url
+                                    if "PGSPSL00001MoveSingleVoteSheet.form" in new_url:
+                                        logger.info("✅ Successfully returned to voting page via link")
+                                        return True
+                                    else:
+                                        logger.info(f"Link led to: {new_url}, continuing search...")
+                                        
+                        except Exception as e:
+                            logger.debug(f"Link search {link_xpath} failed: {e}")
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"Link search failed: {e}")
+                
+                # Method 2: Navigate back using browser back button
+                logger.info("🔄 Trying browser back navigation...")
+                try:
+                    self.driver.back()
+                    time.sleep(3)
+                    
+                    # Verify we're back on voting page
+                    new_url = self.driver.current_url
+                    if "PGSPSL00001MoveSingleVoteSheet.form" in new_url:
+                        logger.info("✅ Successfully returned to voting page via back button")
+                        return True
+                    else:
+                        logger.warning(f"Back navigation led to unexpected page: {new_url}")
+                        
+                except Exception as e:
+                    logger.warning(f"Back navigation failed: {e}")
+                
+                # Method 3: Direct URL navigation (if we know the URL pattern)
+                logger.info("🔄 Trying direct URL navigation...")
+                try:
+                    # Try to construct the voting page URL based on current URL
+                    if "store.toto-dream.com" in current_url:
+                        voting_url = "https://store.toto-dream.com/dcs/subos/screen/ps01/spsl000/PGSPSL00001MoveSingleVoteSheet.form"
+                        logger.info(f"Attempting direct navigation to: {voting_url}")
+                        self.driver.get(voting_url)
+                        time.sleep(3)
+                        
+                        new_url = self.driver.current_url
+                        if "PGSPSL00001MoveSingleVoteSheet.form" in new_url:
+                            logger.info("✅ Successfully returned to voting page via direct URL")
+                            return True
+                        else:
+                            logger.warning(f"Direct navigation led to: {new_url}")
+                            
+                except Exception as e:
+                    logger.warning(f"Direct navigation failed: {e}")
+                
+                # Method 4: Try fallback navigation method
+                return self._navigate_to_voting_page()
+            
+            # If not on cart page, we might still be on voting page
+            elif "PGSPSL00001MoveSingleVoteSheet.form" in current_url:
+                logger.info("✅ Still on voting page - ready for next batch")
+                return True
+            
+            else:
+                logger.warning(f"Unexpected page after cart addition: {current_url}")
+                return self._navigate_to_voting_page()
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling cart page navigation: {e}")
+            return False
+    
+    def _navigate_to_voting_page(self) -> bool:
+        """
+        Navigate to voting page (fallback method)
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            logger.info("🔄 Attempting to navigate to voting page...")
+            
+            # Try to find link to voting page
+            voting_links = [
+                "//a[contains(@href, 'PGSPSL00001MoveSingleVoteSheet')]",
+                "//a[contains(text(), '投票')]",
+                "//a[contains(text(), '予想')]",
+                "//button[contains(text(), '投票')]",
+                "//button[contains(text(), '予想')]"
+            ]
+            
+            for link_xpath in voting_links:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, link_xpath)
+                    if elements:
+                        element = elements[0]
+                        if element.is_displayed() and element.is_enabled():
+                            element.click()
+                            logger.info(f"✅ Clicked voting page link: {link_xpath}")
+                            time.sleep(2)
+                            return True
+                except Exception as e:
+                    logger.debug(f"Failed to click link {link_xpath}: {e}")
+                    continue
+            
+            logger.warning("⚠️ Could not find voting page link - manual navigation may be required")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error navigating to voting page: {e}")
+            return False
+    
+    def _try_click_cart_button(self, cart_button_candidates) -> bool:
+        """
+        Try multiple methods to click cart button
+        
+        Args:
+            cart_button_candidates: List of (index, element, text) tuples
+            
+        Returns:
+            bool: True if cart button clicked successfully, False otherwise
+        """
+        try:
+            # Method 1: Try direct candidates from analysis
+            logger.info("🎯 Method 1: Trying direct cart button candidates...")
+            for i, (index, btn, text) in enumerate(cart_button_candidates):
+                try:
+                    if btn.is_displayed() and btn.is_enabled():
+                        logger.info(f"Attempting to click candidate {i}: '{text}'")
+                        btn.click()
+                        logger.info(f"✅ Successfully clicked cart button candidate {i}: '{text}'")
+                        time.sleep(1)
+                        return True
+                except Exception as e:
+                    logger.warning(f"Failed to click candidate {i}: {e}")
+                    continue
+            
+            # Method 2: Try using WebDriverManager's click_element_safe
+            logger.info("🎯 Method 2: Trying with WebDriverManager...")
+            cart_success = self.driver_manager.click_element_safe(
+                Config.SELECTORS['cart_button'], 
+                "cart button"
+            )
+            if cart_success:
+                logger.info("✅ Cart button clicked via WebDriverManager")
+                return True
+            
+            # Method 3: Try XPath-based search for cart buttons
+            logger.info("🎯 Method 3: Trying XPath-based search...")
+            cart_xpaths = [
+                "//span[contains(@class, 'kounyu_cart_multiline_base')]",
+                "//span[contains(text(), '購入カートに追加')]",
+                "//*[contains(@class, 'kounyu_cart')]",
+                "//div[contains(text(), '購入カートに追加')]",
+                "//a[contains(text(), '購入カートに追加')]",
+                "//input[contains(@value, 'カートに追加')]",
+                "//input[contains(@value, '購入カートに追加')]",
+                "//input[contains(@value, '追加')]",
+                "//button[contains(text(), 'カートに追加')]",
+                "//button[contains(text(), '購入カートに追加')]",
+                "//button[contains(text(), '追加')]",
+                "//span[contains(text(), 'カート')]",
+                "//span[contains(text(), '追加')]",
+                "//input[@type='submit' and contains(@value, 'カート')]",
+                "//input[@type='button' and contains(@value, 'カート')]",
+                "//button[@type='submit' and contains(text(), 'カート')]",
+                "//button[@type='button' and contains(text(), 'カート')]",
+                "//*[contains(@onclick, 'cart') or contains(@onclick, 'Cart')]",
+                "//*[contains(@onclick, 'add') or contains(@onclick, 'Add')]"
+            ]
+            
+            for xpath in cart_xpaths:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, xpath)
+                    for element in elements:
+                        if element.is_displayed() and element.is_enabled():
+                            element_text = element.get_attribute('value') or element.text or 'no-text'
+                            logger.info(f"Trying XPath cart button: '{element_text}'")
+                            element.click()
+                            logger.info(f"✅ Successfully clicked XPath cart button: '{element_text}'")
+                            time.sleep(1)
+                            return True
+                except Exception as e:
+                    logger.debug(f"XPath {xpath} failed: {e}")
+                    continue
+            
+            # Method 4: JavaScript click for stubborn buttons
+            logger.info("🎯 Method 4: Trying JavaScript click...")
+            try:
+                # Try to find any element with cart-related attributes via JavaScript
+                js_script = """
+                var elements = document.querySelectorAll('*');
+                for (var i = 0; i < elements.length; i++) {
+                    var elem = elements[i];
+                    var text = elem.value || elem.textContent || elem.innerText || '';
+                    var onclick = elem.getAttribute('onclick') || '';
+                    var className = elem.className || '';
+                    var id = elem.id || '';
+                    
+                    if (text.includes('購入カートに追加') || 
+                        className.includes('kounyu_cart_multiline_base') ||
+                        className.includes('kounyu_cart') ||
+                        text.includes('追加') || text.includes('カート') || 
+                        onclick.toLowerCase().includes('cart') || onclick.toLowerCase().includes('add') ||
+                        className.toLowerCase().includes('cart') || className.toLowerCase().includes('add') ||
+                        id.toLowerCase().includes('cart') || id.toLowerCase().includes('add')) {
+                        
+                        console.log('Found cart element via JS:', text, 'class:', className);
+                        try {
+                            // Try multiple click methods
+                            console.log('Attempting to click element:', text);
+                            
+                            // Method 1: Direct click
+                            elem.click();
+                            
+                            // Method 2: Dispatch click event
+                            var clickEvent = new MouseEvent('click', {
+                                view: window,
+                                bubbles: true,
+                                cancelable: true
+                            });
+                            elem.dispatchEvent(clickEvent);
+                            
+                            // Method 3: If it has onclick, execute it
+                            if (onclick) {
+                                try {
+                                    eval(onclick);
+                                } catch (e2) {
+                                    console.log('onclick eval failed:', e2);
+                                }
+                            }
+                            
+                            return 'clicked: ' + text + ' (class: ' + className + ')';
+                        } catch (e) {
+                            console.log('Click failed for element:', e);
+                        }
+                    }
+                }
+                return 'not found';
+                """
+                
+                result = self.driver.execute_script(js_script)
+                if result and result != 'not found':
+                    logger.info(f"✅ JavaScript click successful: {result}")
+                    time.sleep(1)
+                    return True
+                else:
+                    logger.info("JavaScript method found no clickable cart buttons")
+                    
+            except Exception as e:
+                logger.warning(f"JavaScript click method failed: {e}")
+            
+            logger.error("❌ All cart button click methods failed")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error in _try_click_cart_button: {e}")
+            return False
+    
+    def _check_form_status_after_click(self) -> bool:
+        """
+        Check form status after cart button click to identify issues
+        
+        Returns:
+            bool: True if form seems OK, False if issues detected
+        """
+        try:
+            logger.info("🔍 Checking form status after cart button click...")
+            
+            # First check if there's an alert and handle it
+            try:
+                alert = self.driver.switch_to.alert
+                alert_text = alert.text
+                logger.info(f"✅ Found alert during status check: '{alert_text}'")
+                alert.accept()
+                logger.info("✅ Alert accepted during status check")
+                
+                # Check if new window opened after alert
+                self._handle_new_window_after_cart_addition()
+                
+                return True
+            except:
+                # No alert, continue with normal checks
+                pass
+            
+            # Get current URL
+            current_url = self.driver.current_url
+            logger.info(f"Current URL: {current_url}")
+            
+            # Check for JavaScript errors in console
+            try:
+                js_errors = self.driver.execute_script("""
+                    var errors = [];
+                    if (window.console && window.console.error) {
+                        // This is a simplified check - in reality we'd need to capture console messages
+                        return 'Console check completed';
+                    }
+                    return 'No console access';
+                """)
+                logger.info(f"JavaScript console check: {js_errors}")
+            except Exception as e:
+                logger.debug(f"Console check failed: {e}")
+            
+            # Check for form validation messages
+            try:
+                error_selectors = [
+                    ".error, .error-message, .validation-error",
+                    "[class*='error']",
+                    "[id*='error']",
+                    "span[style*='color: red'], div[style*='color: red']",
+                    ".alert, .warning, .notice",
+                    "*[class*='alert']"
+                ]
+                
+                for selector in error_selectors:
+                    try:
+                        error_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for element in error_elements:
+                            if element.is_displayed():
+                                error_text = element.text.strip()
+                                if error_text:
+                                    logger.warning(f"❌ Found error message: '{error_text}' (selector: {selector})")
+                                    return False
+                    except Exception as e:
+                        logger.debug(f"Error selector {selector} failed: {e}")
+                        
+            except Exception as e:
+                logger.debug(f"Error message check failed: {e}")
+            
+            # Check if any alerts are present
+            try:
+                alert = self.driver.switch_to.alert
+                alert_text = alert.text
+                logger.info(f"Found alert after click: '{alert_text}'")
+                alert.accept()  # Accept it immediately
+                logger.info("✅ Alert accepted in status check")
+                return True  # Alert is expected for cart addition
+            except:
+                logger.debug("No alert found")
+            
+            # Check if URL changed (might indicate redirect or success)
+            if current_url != self.driver.current_url:
+                new_url = self.driver.current_url
+                logger.info(f"URL changed to: {new_url}")
+                return True
+            
+            # Check if page content changed
+            try:
+                page_title = self.driver.title
+                logger.info(f"Page title: {page_title}")
+                
+                # Look for success indicators
+                success_indicators = [
+                    "カート", "cart", "追加", "success", "complete"
+                ]
+                
+                page_source_lower = self.driver.page_source.lower()
+                for indicator in success_indicators:
+                    if indicator in page_source_lower:
+                        logger.info(f"Found success indicator: '{indicator}' in page")
+                        return True
+                        
+            except Exception as e:
+                logger.debug(f"Page content check failed: {e}")
+            
+            # Check for required fields that might be missing
+            try:
+                required_fields = self.driver.find_elements(By.CSS_SELECTOR, "input[required], select[required]")
+                empty_required = []
+                
+                for field in required_fields:
+                    if field.is_displayed():
+                        field_value = field.get_attribute('value') or ''
+                        field_name = field.get_attribute('name') or field.get_attribute('id') or 'unknown'
+                        
+                        if not field_value.strip():
+                            empty_required.append(field_name)
+                
+                if empty_required:
+                    logger.warning(f"❌ Found empty required fields: {empty_required}")
+                    return False
+                else:
+                    logger.info("✅ All required fields appear to be filled")
+                    
+            except Exception as e:
+                logger.debug(f"Required fields check failed: {e}")
+            
+            logger.info("✅ Form status check completed - no obvious issues detected")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking form status: {e}")
+            return True  # Don't fail the whole process for this check
+    
+    def _diagnose_form_submission_failure(self):
+        """
+        Diagnose why form submission might have failed
+        """
+        try:
+            logger.info("🔍 Diagnosing form submission failure...")
+            
+            # Check if we're still on the same page
+            current_url = self.driver.current_url
+            logger.info(f"Still on URL: {current_url}")
+            
+            # Look for specific validation issues in toto forms
+            try:
+                # Check if all games have selections
+                logger.info("Checking if all games have selections...")
+                
+                games_without_selection = []
+                # Quick check for games without selections (only first 5 games to reduce log spam)
+                for game_index in range(min(13, 5)):  # Check only first 5 games to reduce processing
+                    game_has_selection = False
+                    
+                    # Check if any checkbox is selected for this game
+                    for set_index in range(min(10, 3)):  # Check only first 3 sets to reduce processing
+                        for value in [0, 1, 2]:
+                            try:
+                                checkbox_name = f"chkbox_{game_index}_{set_index}_{value}"
+                                checkbox = self.driver.find_element(By.NAME, checkbox_name)
+                                if checkbox.is_selected():
+                                    game_has_selection = True
+                                    break
+                            except:
+                                continue
+                            
+                            if game_has_selection:
+                                break
+                        
+                        if game_has_selection:
+                            break
+                    
+                    if not game_has_selection:
+                        games_without_selection.append(game_index + 1)
+                
+                if games_without_selection:
+                    logger.warning(f"❌ Some games may lack selections (sampled first 5 games): {games_without_selection}")
+                else:
+                    logger.info("✅ Sampled games appear to have selections")
+                    
+            except Exception as e:
+                logger.debug(f"Game selection check failed: {e}")
+            
+            # Check for JavaScript errors or console messages
+            try:
+                js_result = self.driver.execute_script("""
+                    // Check if checkBeforeSubmit function exists
+                    if (typeof checkBeforeSubmit === 'function') {
+                        console.log('checkBeforeSubmit function exists');
+                        return 'checkBeforeSubmit exists';
+                    } else {
+                        console.log('checkBeforeSubmit function not found');
+                        return 'checkBeforeSubmit not found';
+                    }
+                """)
+                logger.info(f"JavaScript function check: {js_result}")
+                
+                # Try to manually call the validation function
+                validation_result = self.driver.execute_script("""
+                    try {
+                        if (typeof checkBeforeSubmit === 'function') {
+                            var result = checkBeforeSubmit('PGSPSL00001Form','addShoppingCartTotoSingle','ON','Add');
+                            console.log('checkBeforeSubmit result:', result);
+                            return 'validation result: ' + result;
+                        }
+                        return 'function not available';
+                    } catch (e) {
+                        console.log('Validation function error:', e);
+                        return 'validation error: ' + e.message;
+                    }
+                """)
+                logger.info(f"Manual validation result: {validation_result}")
+                
+            except Exception as e:
+                logger.debug(f"JavaScript validation check failed: {e}")
+            
+            # Check form state
+            try:
+                form_info = self.driver.execute_script("""
+                    var form = document.forms['PGSPSL00001Form'];
+                    if (form) {
+                        var inputs = form.querySelectorAll('input[type="checkbox"]:checked');
+                        return 'Form found with ' + inputs.length + ' checked checkboxes';
+                    } else {
+                        return 'Form PGSPSL00001Form not found';
+                    }
+                """)
+                logger.info(f"Form state: {form_info}")
+                
+            except Exception as e:
+                logger.debug(f"Form state check failed: {e}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error in form submission diagnosis: {e}")
     
     def navigate_to_next_form(self) -> bool:
         """

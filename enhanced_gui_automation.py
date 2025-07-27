@@ -31,12 +31,20 @@ class EnhancedAutomationGUI:
         # Application state
         self.csv_path = tk.StringVar()
         self.action_file = tk.StringVar()
-        self.url = tk.StringVar()
+        self.url = tk.StringVar(value="https://www.toto-dream.com/toto/index.html")
         self.automation_mode = tk.StringVar(value="basic")
         self.headless = tk.BooleanVar(value=False)
         self.browser = tk.StringVar(value="chrome")
         self.timeout = tk.IntVar(value=10)
         self.log_level = tk.StringVar(value="INFO")
+        self.selected_batch = tk.IntVar(value=0)
+        
+        # Data state
+        self.data_handler = None
+        self.available_batches = []
+        self.batch_checkboxes = []  # For multi-batch selection
+        self.current_batch_index = 0
+        self.processing_all_batches = False
         
         # Enhanced automation system
         self.automation_system: Optional[EnhancedAutomationSystem] = None
@@ -59,6 +67,9 @@ class EnhancedAutomationGUI:
         
         # Load available action files
         self.refresh_action_files()
+        
+        # Initialize batch mode UI
+        self.update_batch_mode()
     
     def setup_logging(self):
         """Setup logging for the GUI"""
@@ -127,6 +138,16 @@ class EnhancedAutomationGUI:
         self.action_combo.grid(row=1, column=1, padx=5, pady=2)
         ttk.Button(file_frame, text="Refresh", command=self.refresh_action_files).grid(row=1, column=2, padx=5, pady=2)
         
+        # Batch selection section
+        batch_frame = ttk.LabelFrame(main_frame, text="Batch Selection", padding=10)
+        batch_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(batch_frame, text="Batch:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.batch_combo = ttk.Combobox(batch_frame, width=47, state="readonly")
+        self.batch_combo.grid(row=0, column=1, padx=5, pady=2)
+        self.batch_combo.bind('<<ComboboxSelected>>', self.on_batch_selected)
+        ttk.Button(batch_frame, text="Update Batches", command=self.update_batches).grid(row=0, column=2, padx=5, pady=2)
+        
         # URL section
         url_frame = ttk.LabelFrame(main_frame, text="Target URL (Optional)", padding=10)
         url_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -152,6 +173,56 @@ class EnhancedAutomationGUI:
         
         self.stop_button = ttk.Button(control_frame, text="Stop", command=self.stop_automation, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
+        
+        # Form input control section (initially hidden)
+        self.form_input_frame = ttk.LabelFrame(main_frame, text="Form Input Control", padding=10)
+        
+        # Voting page status
+        self.voting_page_status = ttk.Label(self.form_input_frame, text="Voting page not reached", foreground="red")
+        self.voting_page_status.pack(pady=5)
+        
+        # Batch selection mode
+        batch_mode_frame = ttk.Frame(self.form_input_frame)
+        batch_mode_frame.pack(fill=tk.X, pady=5)
+        
+        self.batch_mode = tk.StringVar(value="single")
+        ttk.Radiobutton(batch_mode_frame, text="Single Batch", variable=self.batch_mode, 
+                       value="single", command=self.update_batch_mode).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(batch_mode_frame, text="All Batches", variable=self.batch_mode, 
+                       value="all", command=self.update_batch_mode).pack(side=tk.LEFT, padx=5)
+        
+        # Single batch selection
+        self.single_batch_frame = ttk.Frame(self.form_input_frame)
+        self.single_batch_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(self.single_batch_frame, text="Batch to input:").pack(side=tk.LEFT, padx=5)
+        self.form_input_batch_combo = ttk.Combobox(self.single_batch_frame, width=30, state="readonly")
+        self.form_input_batch_combo.pack(side=tk.LEFT, padx=5)
+        
+        # Multiple batch selection
+        self.multi_batch_frame = ttk.LabelFrame(self.form_input_frame, text="Batch Selection", padding=5)
+        
+        # Processing status
+        self.processing_status_frame = ttk.Frame(self.form_input_frame)
+        self.processing_status_frame.pack(fill=tk.X, pady=5)
+        
+        self.current_batch_label = ttk.Label(self.processing_status_frame, text="Ready")
+        self.current_batch_label.pack(side=tk.LEFT, padx=5)
+        
+        self.batch_progress = ttk.Progressbar(self.processing_status_frame, mode='determinate')
+        self.batch_progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # Form input control buttons
+        input_buttons_frame = ttk.Frame(self.form_input_frame)
+        input_buttons_frame.pack(fill=tk.X, pady=5)
+        
+        self.start_form_input_button = ttk.Button(input_buttons_frame, text="Start Form Input", 
+                                                 command=self.start_form_input, state=tk.DISABLED)
+        self.start_form_input_button.pack(side=tk.LEFT, padx=5)
+        
+        self.start_all_batches_button = ttk.Button(input_buttons_frame, text="Process All Batches", 
+                                                  command=self.start_all_batches, state=tk.DISABLED)
+        self.start_all_batches_button.pack(side=tk.LEFT, padx=5)
         
         ttk.Button(control_frame, text="Take Screenshot", command=self.take_screenshot).pack(side=tk.RIGHT, padx=5)
     
@@ -403,14 +474,18 @@ class EnhancedAutomationGUI:
         
         try:
             # Load data
-            data_handler = DataHandler(self.csv_path.get())
-            if not data_handler.load_csv_data():
+            self.data_handler = DataHandler(self.csv_path.get())
+            if not self.data_handler.load_csv_data():
                 messagebox.showerror("Error", "Failed to load CSV data")
                 return
             
+            # Split into batches and update UI
+            self.available_batches = self.data_handler.split_data_into_batches()
+            self.update_batch_selection()
+            
             # Get data info and preview
-            info = data_handler.get_data_info()
-            preview = data_handler.preview_data(10)
+            info = self.data_handler.get_data_info()
+            preview = self.data_handler.preview_data(10)
             
             # Display in preview area
             self.data_preview.config(state=tk.NORMAL)
@@ -463,6 +538,10 @@ class EnhancedAutomationGUI:
             messagebox.showerror("Error", "CSV file is required for execute and basic modes")
             return
         
+        if mode in ["execute", "basic"] and not self.available_batches:
+            messagebox.showerror("Error", "Please load CSV data and update batches first")
+            return
+        
         if mode == "execute" and not self.action_file.get():
             messagebox.showerror("Error", "Action file is required for execute mode")
             return
@@ -486,6 +565,12 @@ class EnhancedAutomationGUI:
                 timeout=self.timeout.get()
             )
             
+            # Set batch data if available
+            if mode in ["execute", "basic"] and self.available_batches:
+                selected_batch_data = self.get_selected_batch_data()
+                if selected_batch_data:
+                    self.automation_system.set_batch_data(selected_batch_data)
+            
             # Start automation in separate thread
             self.automation_thread = threading.Thread(target=self.run_automation, daemon=True)
             self.automation_thread.start()
@@ -496,6 +581,10 @@ class EnhancedAutomationGUI:
             self.stop_button.config(state=tk.NORMAL)
             self.progress.start()
             self.update_status(f"Automation started in {mode} mode")
+            
+            # Start checking voting page status
+            if mode in ["execute", "basic"]:
+                self.check_voting_page_status()
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start automation: {e}")
@@ -515,6 +604,18 @@ class EnhancedAutomationGUI:
         """Handle automation completion"""
         self.is_running = False
         self.start_button.config(state=tk.NORMAL)
+        
+        # Hide form input frame and reset state
+        self.form_input_frame.pack_forget()
+        self.voting_page_status.config(text="Voting page not reached", foreground="red")
+        self.start_form_input_button.config(state=tk.DISABLED)
+        self.start_all_batches_button.config(state=tk.DISABLED)
+        
+        # Reset batch processing state
+        self.processing_all_batches = False
+        self.current_batch_index = 0
+        self.current_batch_label.config(text="Ready")
+        self.batch_progress['value'] = 0
         self.stop_button.config(state=tk.DISABLED)
         self.progress.stop()
         
@@ -592,6 +693,254 @@ class EnhancedAutomationGUI:
                 messagebox.showinfo("Success", f"Logs saved to {filename}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save logs: {e}")
+    
+    def update_batches(self):
+        """Update available batches from current CSV"""
+        if not self.csv_path.get():
+            messagebox.showerror("Error", "Please select a CSV file first")
+            return
+        
+        try:
+            if not self.data_handler:
+                self.data_handler = DataHandler(self.csv_path.get())
+                if not self.data_handler.load_csv_data():
+                    messagebox.showerror("Error", "Failed to load CSV data")
+                    return
+            
+            self.available_batches = self.data_handler.split_data_into_batches()
+            self.update_batch_selection()
+            self.update_status(f"Updated batches: {len(self.available_batches)} available")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to update batches: {e}")
+    
+    def update_batch_selection(self):
+        """Update batch selection combobox"""
+        if not self.available_batches:
+            self.batch_combo['values'] = ["No batches available"]
+            self.batch_combo.set("No batches available")
+            return
+        
+        # Create batch options with details
+        batch_options = []
+        for i, batch in enumerate(self.available_batches):
+            batch_info = f"Batch {i+1} ({len(batch)} sets)"
+            batch_options.append(batch_info)
+        
+        self.batch_combo['values'] = batch_options
+        self.batch_combo.set(batch_options[0])
+        self.selected_batch.set(0)  # Reset to first batch
+    
+    def on_batch_selected(self, event):
+        """Handle batch selection change"""
+        selected_text = self.batch_combo.get()
+        if selected_text and "Batch" in selected_text:
+            # Extract batch number from text like "Batch 1 (10 sets)"
+            try:
+                batch_num = int(selected_text.split()[1]) - 1  # Convert to 0-based index
+                self.selected_batch.set(batch_num)
+                self.update_status(f"Selected {selected_text}")
+            except (IndexError, ValueError):
+                pass
+    
+    def get_selected_batch_data(self):
+        """Get the currently selected batch data"""
+        if not self.available_batches or self.selected_batch.get() >= len(self.available_batches):
+            return None
+        return self.available_batches[self.selected_batch.get()]
+    
+    def start_form_input(self):
+        """Start form input with selected batch"""
+        if not self.automation_system:
+            messagebox.showerror("Error", "No automation system running")
+            return
+        
+        if not self.automation_system.is_voting_page_ready():
+            messagebox.showerror("Error", "Voting page not ready")
+            return
+        
+        # Get selected batch for form input
+        selected_batch_text = self.form_input_batch_combo.get()
+        if not selected_batch_text or "Batch" not in selected_batch_text:
+            messagebox.showerror("Error", "Please select a batch to input")
+            return
+        
+        try:
+            # Extract batch index
+            batch_num = int(selected_batch_text.split()[1]) - 1
+            if batch_num >= len(self.available_batches):
+                messagebox.showerror("Error", "Invalid batch selection")
+                return
+            
+            # Set the selected batch data
+            selected_batch_data = self.available_batches[batch_num]
+            self.automation_system.set_batch_data(selected_batch_data)
+            
+            # Authorize form input
+            self.automation_system.start_form_input()
+            
+            # Update UI
+            self.start_form_input_button.config(state=tk.DISABLED)
+            self.update_status(f"Form input started with {selected_batch_text}")
+            
+        except (IndexError, ValueError) as e:
+            messagebox.showerror("Error", f"Failed to start form input: {e}")
+    
+    def check_voting_page_status(self):
+        """Check and update voting page status"""
+        if self.automation_system and self.automation_system.is_voting_page_ready():
+            self.voting_page_status.config(text="✅ Voting page ready", foreground="green")
+            self.form_input_frame.pack(fill=tk.X, padx=10, pady=5)
+            
+            # Update batch mode UI
+            self.update_batch_mode()
+            
+            # Update form input batch combo
+            if self.available_batches:
+                batch_options = []
+                for i, batch in enumerate(self.available_batches):
+                    batch_info = f"Batch {i+1} ({len(batch)} sets)"
+                    batch_options.append(batch_info)
+                self.form_input_batch_combo['values'] = batch_options
+                if batch_options:
+                    self.form_input_batch_combo.set(batch_options[0])
+        
+        # Schedule next check
+        if self.is_running:
+            self.root.after(1000, self.check_voting_page_status)
+    
+    def update_batch_mode(self):
+        """Update UI based on selected batch mode"""
+        # Check if UI elements exist
+        if not hasattr(self, 'single_batch_frame') or not hasattr(self, 'multi_batch_frame'):
+            return
+        
+        mode = self.batch_mode.get()
+        
+        if mode == "single":
+            self.single_batch_frame.pack(fill=tk.X, pady=5)
+            self.multi_batch_frame.pack_forget()
+            if hasattr(self, 'start_form_input_button'):
+                self.start_form_input_button.config(state=tk.NORMAL if self.automation_system and self.automation_system.is_voting_page_ready() else tk.DISABLED)
+            if hasattr(self, 'start_all_batches_button'):
+                self.start_all_batches_button.config(state=tk.DISABLED)
+        elif mode == "all":
+            self.single_batch_frame.pack_forget()
+            self.setup_multi_batch_selection()
+            self.multi_batch_frame.pack(fill=tk.X, pady=5)
+            if hasattr(self, 'start_form_input_button'):
+                self.start_form_input_button.config(state=tk.DISABLED)
+            if hasattr(self, 'start_all_batches_button'):
+                self.start_all_batches_button.config(state=tk.NORMAL if self.automation_system and self.automation_system.is_voting_page_ready() else tk.DISABLED)
+    
+    def setup_multi_batch_selection(self):
+        """Setup multiple batch selection UI"""
+        # Clear existing checkboxes
+        for widget in self.multi_batch_frame.winfo_children():
+            widget.destroy()
+        self.batch_checkboxes.clear()
+        
+        if not self.available_batches:
+            ttk.Label(self.multi_batch_frame, text="No batches available").pack()
+            return
+        
+        ttk.Label(self.multi_batch_frame, text="Select batches to process:").pack(anchor=tk.W, pady=2)
+        
+        # Add "Select All" checkbox
+        select_all_var = tk.BooleanVar()
+        select_all_cb = ttk.Checkbutton(self.multi_batch_frame, text="Select All", 
+                                       variable=select_all_var, command=lambda: self.toggle_all_batches(select_all_var.get()))
+        select_all_cb.pack(anchor=tk.W, pady=2)
+        
+        # Add individual batch checkboxes
+        for i, batch in enumerate(self.available_batches):
+            var = tk.BooleanVar(value=True)  # Default to selected
+            text = f"Batch {i+1} ({len(batch)} sets)"
+            cb = ttk.Checkbutton(self.multi_batch_frame, text=text, variable=var)
+            cb.pack(anchor=tk.W, padx=20, pady=1)
+            self.batch_checkboxes.append(var)
+    
+    def toggle_all_batches(self, select_all: bool):
+        """Toggle all batch checkboxes"""
+        for var in self.batch_checkboxes:
+            var.set(select_all)
+    
+    def start_all_batches(self):
+        """Start processing all selected batches"""
+        if not self.automation_system or not self.automation_system.is_voting_page_ready():
+            messagebox.showerror("Error", "Voting page not ready")
+            return
+        
+        # Get selected batches
+        selected_batches = []
+        for i, var in enumerate(self.batch_checkboxes):
+            if var.get():
+                selected_batches.append(i)
+        
+        if not selected_batches:
+            messagebox.showerror("Error", "Please select at least one batch")
+            return
+        
+        # Start processing
+        self.processing_all_batches = True
+        self.current_batch_index = 0
+        self.selected_batch_indices = selected_batches
+        
+        # Update UI
+        self.start_all_batches_button.config(state=tk.DISABLED)
+        self.batch_progress['maximum'] = len(selected_batches)
+        self.batch_progress['value'] = 0
+        
+        # Start with first batch
+        self.process_next_batch()
+    
+    def process_next_batch(self):
+        """Process the next batch in the sequence"""
+        if not self.processing_all_batches or self.current_batch_index >= len(self.selected_batch_indices):
+            self.complete_all_batches_processing()
+            return
+        
+        try:
+            # Get current batch to process
+            batch_index = self.selected_batch_indices[self.current_batch_index]
+            batch_data = self.available_batches[batch_index]
+            
+            # Update UI
+            self.current_batch_label.config(text=f"Processing Batch {batch_index + 1} ({len(batch_data)} sets)")
+            self.batch_progress['value'] = self.current_batch_index
+            
+            # Set batch data and start processing
+            self.automation_system.set_batch_data(batch_data)
+            self.automation_system.start_form_input()
+            
+            self.update_status(f"Processing batch {batch_index + 1}/{len(self.available_batches)}")
+            
+            # Schedule next batch processing (with delay for current batch to complete)
+            self.root.after(5000, self.check_current_batch_completion)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to process batch: {e}")
+            self.complete_all_batches_processing()
+    
+    def check_current_batch_completion(self):
+        """Check if current batch processing is complete"""
+        # This is a simplified check - in a real implementation, you'd want to 
+        # monitor the automation system's state more carefully
+        if self.automation_system and not self.automation_system.form_input_ready:
+            # Current batch might be complete, move to next
+            self.current_batch_index += 1
+            self.process_next_batch()
+        else:
+            # Still processing, check again later
+            self.root.after(2000, self.check_current_batch_completion)
+    
+    def complete_all_batches_processing(self):
+        """Complete all batches processing"""
+        self.processing_all_batches = False
+        self.current_batch_label.config(text="All batches completed")
+        self.batch_progress['value'] = self.batch_progress['maximum']
+        self.start_all_batches_button.config(state=tk.NORMAL)
+        self.update_status("All selected batches processed successfully")
     
     def update_status(self, message):
         """Update status bar message"""

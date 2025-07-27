@@ -28,7 +28,7 @@ class AutomationGUI:
         
         # Application state
         self.csv_path = tk.StringVar()
-        self.url = tk.StringVar()
+        self.url = tk.StringVar(value="https://www.toto-dream.com/toto/index.html")
         self.headless = tk.BooleanVar(value=False)
         self.browser = tk.StringVar(value="chrome")
         self.timeout = tk.IntVar(value=10)
