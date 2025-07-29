@@ -198,6 +198,7 @@ class EnhancedAutomationGUI:
         ttk.Label(self.single_batch_frame, text="Batch to input:").pack(side=tk.LEFT, padx=5)
         self.form_input_batch_combo = ttk.Combobox(self.single_batch_frame, width=30, state="readonly")
         self.form_input_batch_combo.pack(side=tk.LEFT, padx=5)
+        self.form_input_batch_combo.bind('<<ComboboxSelected>>', self.on_batch_selection_changed)
         
         # Multiple batch selection
         self.multi_batch_frame = ttk.LabelFrame(self.form_input_frame, text="Batch Selection", padding=5)
@@ -802,8 +803,9 @@ class EnhancedAutomationGUI:
                     batch_info = f"Batch {i+1} ({len(batch)} sets)"
                     batch_options.append(batch_info)
                 self.form_input_batch_combo['values'] = batch_options
-                if batch_options:
-                    self.form_input_batch_combo.set(batch_options[0])
+                # Don't automatically set to first batch - let user choose
+                if not self.form_input_batch_combo.get():
+                    self.form_input_batch_combo.set("")
         
         # Schedule next check
         if self.is_running:
@@ -821,7 +823,10 @@ class EnhancedAutomationGUI:
             self.single_batch_frame.pack(fill=tk.X, pady=5)
             self.multi_batch_frame.pack_forget()
             if hasattr(self, 'start_form_input_button'):
-                self.start_form_input_button.config(state=tk.NORMAL if self.automation_system and self.automation_system.is_voting_page_ready() else tk.DISABLED)
+                # Enable button only if a batch is selected and voting page is ready
+                batch_selected = hasattr(self, 'form_input_batch_combo') and self.form_input_batch_combo.get()
+                page_ready = self.automation_system and self.automation_system.is_voting_page_ready()
+                self.start_form_input_button.config(state=tk.NORMAL if batch_selected and page_ready else tk.DISABLED)
             if hasattr(self, 'start_all_batches_button'):
                 self.start_all_batches_button.config(state=tk.DISABLED)
         elif mode == "all":
@@ -941,6 +946,10 @@ class EnhancedAutomationGUI:
         self.batch_progress['value'] = self.batch_progress['maximum']
         self.start_all_batches_button.config(state=tk.NORMAL)
         self.update_status("All selected batches processed successfully")
+    
+    def on_batch_selection_changed(self, event):
+        """Handle batch selection change in single batch mode"""
+        self.update_batch_mode()
     
     def update_status(self, message):
         """Update status bar message"""

@@ -489,7 +489,12 @@ class FormFiller:
                     current_url = self.driver.current_url
                     if "vote/confirm" in current_url or "index.html" in current_url:
                         logger.info("✅ Redirected to confirmation/result page - cart addition successful")
-                        return True
+                        # Handle navigation from confirmation page
+                        if self._handle_cart_page_navigation():
+                            return True
+                        else:
+                            logger.warning("Failed to navigate back from confirmation page")
+                            return False
                     
                     # Check if we're on cart page and need to go back
                     if self._handle_cart_page_navigation():
@@ -751,6 +756,23 @@ class FormFiller:
             except:
                 pass
     
+    def _check_browser_alive(self) -> bool:
+        """
+        Check if browser is still alive and responsive
+        
+        Returns:
+            bool: True if browser is responsive, False otherwise
+        """
+        try:
+            # Try to get current URL - this will fail if browser crashed
+            _ = self.driver.current_url
+            # Try to execute a simple JavaScript command
+            self.driver.execute_script("return document.readyState;")
+            return True
+        except Exception as e:
+            logger.warning(f"Browser responsiveness check failed: {e}")
+            return False
+    
     def _handle_cart_page_navigation(self) -> bool:
         """
         Handle navigation after cart addition (return to voting page or stay for next batch)
@@ -758,37 +780,68 @@ class FormFiller:
         Returns:
             bool: True if navigation handled successfully, False otherwise
         """
+        import time
+        start_time = time.time()
+        max_navigation_time = 30  # 30 seconds max for navigation
+        
         try:
+            # Add browser stability check
+            if not self._check_browser_alive():
+                logger.error("Browser is not responsive - cannot handle cart page navigation")
+                return False
+                
             current_url = self.driver.current_url
             logger.info(f"Current URL after cart addition: {current_url}")
             
-            # Check if we're on cart page
-            if "cart" in current_url.lower() or "カート" in self.driver.page_source or "SPSL006" in self.driver.page_source:
+            # Check if we're on cart page or confirmation page
+            try:
+                page_source = self.driver.page_source
+            except Exception as e:
+                logger.warning(f"Failed to get page source: {e}")
+                page_source = ""
+                
+            if ("cart" in current_url.lower() or "カート" in page_source or "SPSL006" in page_source or 
+                "confirm" in current_url.lower() or "index.html" in current_url):
                 logger.info("✅ Detected cart page - product added successfully")
                 
-                # Try multiple methods to return to voting page
+                # Try multiple methods to return to voting page with timeout
                 logger.info("🔄 Attempting to return to voting page for next batch...")
                 
-                # Method 1: Look for specific links to voting page
+                # Method 1: Look for specific links to voting page (including the new button)
                 try:
+                    # Set shorter timeout for link searches to avoid hanging
+                    from selenium.webdriver.support.wait import WebDriverWait
+                    from selenium.webdriver.support import expected_conditions as EC
+                    
+                    # Prioritize specific "totoの投票を追加する" buttons first to avoid wrong redirects
                     voting_page_links = [
-                        "//a[contains(@href, 'PGSPSL00001MoveSingleVoteSheet')]",
-                        "//a[contains(text(), '投票')]",
-                        "//a[contains(text(), '予想')]",
-                        "//a[contains(text(), 'toto')]",
-                        "//a[contains(text(), '戻る')]",
-                        "//button[contains(text(), '戻る')]",
-                        "//a[contains(text(), '続けて購入')]",
-                        "//a[contains(text(), '追加')]",
-                        "//p[contains(text(), 'totoの投票を追加する')]",
+                        "//*[contains(@class, 'c-clubtoto-btn-base__text') and contains(text(), 'totoの投票を追加する')]",
                         "//button[contains(text(), 'totoの投票を追加する')]",
                         "//a[contains(text(), 'totoの投票を追加する')]",
-                        "//*[contains(@class, 'c-clubtoto-btn-base__text')]",
-                        ".breadcrumb a, .pankuzu a"
+                        "//p[contains(text(), 'totoの投票を追加する')]",
+                        "//img[@id='select_single' or @name='select_single']",  # Single button for next batch
+                        "//a[contains(@href, 'PGSPSL00001MoveSingleVoteSheet')]",
+                        "//a[contains(text(), '続けて購入')]",
+                        "//a[contains(text(), '投票を追加')]",
+                        "//a[contains(text(), '投票')]",
+                        "//a[contains(text(), '予想')]",
+                        # Removed generic "toto" and breadcrumb links to avoid wrong redirects
                     ]
                     
                     for link_xpath in voting_page_links:
                         try:
+                            # Check timeout
+                            if time.time() - start_time > max_navigation_time:
+                                logger.warning(f"Navigation timeout exceeded ({max_navigation_time}s), aborting")
+                                return False
+                            
+                            # Check browser health before each search
+                            if not self._check_browser_alive():
+                                logger.warning("Browser became unresponsive, skipping navigation")
+                                return False
+                            
+                            # Use timeout for element search
+                            wait = WebDriverWait(self.driver, 3)  # 3 second timeout per element
                             if link_xpath.startswith("//"):
                                 elements = self.driver.find_elements(By.XPATH, link_xpath)
                             else:
@@ -797,15 +850,33 @@ class FormFiller:
                             for element in elements:
                                 if element.is_displayed() and element.is_enabled():
                                     link_text = element.text or element.get_attribute('href') or 'no-text'
-                                    logger.info(f"Found potential return link: '{link_text}' with xpath: {link_xpath}")
+                                    link_href = element.get_attribute('href') or ''
+                                    
+                                    # Skip links that lead to confirmation/result pages
+                                    if any(bad_url in link_href.lower() for bad_url in ['confirm', 'result', 'vote/confirm']):
+                                        logger.debug(f"Skipping link that leads to confirmation page: {link_href}")
+                                        continue
+                                    
+                                    logger.info(f"Found potential return link: '{link_text}' (href: {link_href}) with xpath: {link_xpath}")
+                                    
+                                    # Special handling for specific buttons
+                                    if 'totoの投票を追加する' in link_text:
+                                        logger.info("🎯 Found 'totoの投票を追加する' button - clicking to return to voting page")
+                                    elif 'select_single' in str(element.get_attribute('id')) or 'select_single' in str(element.get_attribute('name')):
+                                        logger.info("🎯 Found 'シングル' button - clicking to start next batch input loop")
+                                    
                                     element.click()
-                                    time.sleep(2)
+                                    time.sleep(3)  # Wait longer for page transition
                                     
                                     # Check if we're back on voting page
                                     new_url = self.driver.current_url
                                     if "PGSPSL00001MoveSingleVoteSheet.form" in new_url:
                                         logger.info("✅ Successfully returned to voting page via link")
                                         return True
+                                    elif "vote/confirm" in new_url:
+                                        logger.warning(f"⚠️ Link led to confirmation page: {new_url} - this should be avoided")
+                                        # Don't return True, continue to next link
+                                        continue
                                     else:
                                         logger.info(f"Link led to: {new_url}, continuing search...")
                                         
@@ -867,7 +938,29 @@ class FormFiller:
             
         except Exception as e:
             logger.error(f"❌ Error handling cart page navigation: {e}")
-            return False
+            
+            # Check if browser crashed
+            if not self._check_browser_alive():
+                logger.error("Browser appears to have crashed during navigation")
+                return False
+            
+            # Try one more time with direct navigation
+            try:
+                logger.info("Attempting emergency navigation to voting page...")
+                voting_url = "https://www.toto-dream.com/toto/index.html"
+                self.driver.get(voting_url)
+                time.sleep(3)
+                
+                current_url = self.driver.current_url
+                if "PGSPSL00001MoveSingleVoteSheet.form" in current_url or "toto" in current_url:
+                    logger.info("✅ Emergency navigation successful")
+                    return True
+                else:
+                    logger.warning(f"Emergency navigation led to: {current_url}")
+                    return False
+            except Exception as emergency_error:
+                logger.error(f"Emergency navigation also failed: {emergency_error}")
+                return False
     
     def _navigate_to_voting_page(self) -> bool:
         """
@@ -1295,27 +1388,48 @@ class FormFiller:
     
     def navigate_to_next_form(self) -> bool:
         """
-        Navigate to the next form page
+        Navigate to the next form page or back to voting page for next batch
         
         Returns:
             bool: True if successful, False otherwise
         """
         try:
-            logger.info("Navigating to next form")
+            logger.info("Navigating to next form or voting page for next batch")
             
+            # First try the cart page navigation (for post-cart scenarios)
+            if self._handle_cart_page_navigation():
+                logger.info("Successfully navigated back to voting page via cart navigation")
+                return True
+            
+            # If that fails, try the traditional next button approach
             success = self.driver_manager.click_element_safe(
                 Config.SELECTORS['next_button'], 
                 "next button"
             )
             
             if success:
-                logger.info("Successfully navigated to next form")
+                logger.info("Successfully navigated to next form via next button")
                 # Wait for new page to load
                 self.driver_manager.wait_for_page_load()
                 return True
             else:
-                logger.error("Failed to navigate to next form")
-                return False
+                logger.warning("Failed to find next button, trying emergency navigation...")
+                # Try emergency navigation to voting page
+                try:
+                    voting_url = "https://www.toto-dream.com/toto/index.html"
+                    self.driver.get(voting_url)
+                    time.sleep(3)
+                    
+                    current_url = self.driver.current_url
+                    if "PGSPSL00001MoveSingleVoteSheet.form" in current_url or "toto" in current_url:
+                        logger.info("✅ Emergency navigation to voting page successful")
+                        return True
+                    else:
+                        logger.warning(f"Emergency navigation led to: {current_url}")
+                        return False
+                except Exception as emergency_error:
+                    logger.error(f"Emergency navigation failed: {emergency_error}")
+                    return False
                 
         except Exception as e:
             logger.error(f"Error navigating to next form: {e}")

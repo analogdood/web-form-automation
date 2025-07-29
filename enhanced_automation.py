@@ -440,13 +440,18 @@ class EnhancedAutomationSystem:
             # Handle any alerts
             self.webdriver_manager.handle_alert(accept=True)
             
-            # Confirm submission if needed
-            self.form_filler.confirm_submission()
+            # Skip confirm_submission for cart scenarios - navigation handles this
+            # self.form_filler.confirm_submission()  # Disabled - causes redirect to wrong page
             
-            # Navigate to next form (if not the last batch)
-            if self.current_batch < self.total_batches:
-                if not self.form_filler.navigate_to_next_form():
-                    return False
+            # Navigate to next form or return to voting page for next batch selection
+            # Always try to navigate back to allow for next batch processing
+            if not self.form_filler.navigate_to_next_form():
+                # Try to navigate to cart page navigation as fallback
+                if hasattr(self.form_filler, '_handle_cart_page_navigation'):
+                    if not self.form_filler._handle_cart_page_navigation():
+                        self.logger.warning("Failed to navigate back for next batch - batch processing may be incomplete")
+                else:
+                    self.logger.warning("Could not navigate to next form - batch processing may be incomplete")
             
             return True
             
@@ -469,6 +474,21 @@ class EnhancedAutomationSystem:
         if stats["processed_sets"] > 0:
             rate = stats["processed_sets"] / duration if duration > 0 else 0
             self.logger.info(f"Processing rate: {rate:.2f} sets/second")
+        
+        # Display completion message
+        if stats["successful_batches"] > 0:
+            self.logger.info("=" * 50)
+            self.logger.info("🎉 ALL BATCH PROCESSING COMPLETED SUCCESSFULLY! 🎉")
+            self.logger.info("=" * 50)
+            self.logger.info(f"✅ Total batches processed: {stats['successful_batches']}")
+            self.logger.info(f"✅ Total sets processed: {stats['processed_sets']}")
+            if stats["failed_batches"] > 0:
+                self.logger.warning(f"⚠️  Failed batches: {stats['failed_batches']}")
+            self.logger.info("All items have been added to your cart!")
+            self.logger.info("You can now proceed to checkout when ready.")
+            self.logger.info("=" * 50)
+        else:
+            self.logger.warning("⚠️ No batches were processed successfully.")
     
     def _cleanup(self):
         """Cleanup resources"""
