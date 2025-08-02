@@ -16,6 +16,7 @@ from form_filler import FormFiller
 from action_recorder import ActionRecorder
 from action_player import ActionPlayer
 from action_manager import ActionSequence, ActionFileManager, load_or_create_sample_actions
+from toto_round_selector import TotoRoundSelector
 import click
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class EnhancedAutomationSystem:
         self.action_recorder = None
         self.action_player = None
         self.action_file_manager = ActionFileManager()
+        self.round_selector = None
         
         # Batch data (can be set externally)
         self.batch_data = None
@@ -55,11 +57,22 @@ class EnhancedAutomationSystem:
         self.total_batches = 0
         self.form_input_ready = False  # Flag to control form input start
         self.voting_page_reached = False
+        
+        # Progress callback function (optional)
+        self.progress_callback = None
+        
+        # Error recovery settings
+        self.max_retries = 3
+        self.retry_delay = 5  # seconds
+        self.error_recovery_enabled = True
+        
         self.processing_stats = {
             "total_sets": 0,
             "processed_sets": 0,
             "successful_batches": 0,
             "failed_batches": 0,
+            "retry_attempts": 0,
+            "recovered_errors": 0,
             "start_time": 0,
             "end_time": 0
         }
@@ -95,6 +108,67 @@ class EnhancedAutomationSystem:
         """
         self.batch_data = batch_data
         self.logger.info(f"Batch data set: {len(batch_data)} sets")
+    
+    def set_progress_callback(self, callback):
+        """
+        Set progress callback function for real-time progress updates
+        
+        Args:
+            callback: Function that accepts (current_batch, total_batches, current_set, total_sets, stage)
+        """
+        self.progress_callback = callback
+    
+    def _attempt_error_recovery(self):
+        """Attempt to recover from errors by taking diagnostic actions"""
+        try:
+            self.logger.info("🚑 Attempting error recovery...")
+            
+            # Take screenshot for debugging
+            if self.webdriver_manager and self.webdriver_manager.driver:
+                try:
+                    screenshot_path = f"logs/error_recovery_{int(time.time())}.png"
+                    self.webdriver_manager.driver.save_screenshot(screenshot_path)
+                    self.logger.info(f"📸 Error recovery screenshot saved: {screenshot_path}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to take recovery screenshot: {e}")
+                
+                # Check if we're still on a valid page
+                try:
+                    current_url = self.webdriver_manager.driver.current_url
+                    page_title = self.webdriver_manager.driver.title
+                    self.logger.info(f"🔍 Current page: {current_url}")
+                    self.logger.info(f"🔍 Page title: {page_title}")
+                    
+                    # Handle any alerts that might be blocking
+                    alert_handled = self.webdriver_manager.handle_alert(accept=True)
+                    if alert_handled:
+                        self.logger.info("✅ Alert handled during recovery")
+                    
+                    # Check for modal dialogs and handle them
+                    if self.round_selector:
+                        self.round_selector._handle_modal_dialogs()
+                        self.logger.info("✅ Modal dialogs handled during recovery")
+                    
+                    # If we're not on the voting page, try to navigate back
+                    if 'PGSPSL00001MoveSingleVoteSheet' not in current_url:
+                        self.logger.info("🔄 Not on voting page, attempting recovery navigation...")
+                        if self.round_selector and self.current_batch > 1:
+                            # Try to navigate back to voting page
+                            if self.round_selector.click_round_link_on_addition_page():
+                                self.logger.info("✅ Recovery navigation: clicked round link")
+                                if self.round_selector.click_single_button():
+                                    self.logger.info("✅ Recovery navigation: clicked single button")
+                                    return True
+                
+                except Exception as e:
+                    self.logger.warning(f"Recovery check failed: {e}")
+            
+            self.logger.info("🚑 Error recovery completed")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error recovery failed: {e}")
+            return False
     
     def start_form_input(self):
         """Signal that form input can begin"""
@@ -248,6 +322,11 @@ class EnhancedAutomationSystem:
             return False
         
         self.form_filler = FormFiller(self.webdriver_manager)
+        
+        # Initialize round selector
+        self.round_selector = TotoRoundSelector(self.webdriver_manager.driver)
+        self.logger.info("Round selector initialized")
+        
         return True
     
     def _load_data(self) -> bool:
@@ -364,13 +443,35 @@ class EnhancedAutomationSystem:
     
     def _process_data_batches(self) -> bool:
         """Process data batches using original method (basic mode)"""
-        if self.batch_data:
-            # Use pre-loaded batch data (single batch)
+        # Determine data source priority: data_handler with data > batch_data > empty data_handler
+        if self.data_handler and hasattr(self.data_handler, 'split_data_into_batches'):
+            # Check if data handler actually has data
+            data_info = self.data_handler.get_data_info()
+            total_sets = data_info.get('total_sets', 0)
+            
+            if total_sets > 0:
+                # Data handler has data - use it for multi-batch processing
+                self.logger.info(f"🔍 DEBUG: Using data handler with {total_sets} sets, estimated {data_info.get('estimated_batches', 'unknown')} batches")
+                batches = self.data_handler.split_data_into_batches()
+                self.logger.info(f"✅ Data handler split into {len(batches)} batches with sizes: {[len(b) for b in batches]}")
+                
+                if self.batch_data:
+                    self.logger.info(f"📝 Note: batch_data also set with {len(self.batch_data)} sets, but using data handler for multi-batch processing")
+            else:
+                # Data handler has no data - fall back to batch_data
+                if self.batch_data:
+                    batches = [self.batch_data]
+                    self.logger.info(f"🔄 Data handler empty, using pre-loaded batch_data as single batch ({len(self.batch_data)} sets)")
+                else:
+                    self.logger.error("❌ Both data handler and batch_data are empty")
+                    return False
+        elif self.batch_data:
+            # No data handler - use batch_data
             batches = [self.batch_data]
-            self.logger.info(f"Using pre-loaded batch data as single batch")
+            self.logger.info(f"📦 Using pre-loaded batch_data as single batch ({len(self.batch_data)} sets)")
         else:
-            # Use data handler to split CSV into batches
-            batches = self.data_handler.split_data_into_batches()
+            self.logger.error("❌ No data source available - neither data handler nor batch data")
+            return False
         
         if not batches:
             self.logger.error("No data batches to process")
@@ -385,13 +486,63 @@ class EnhancedAutomationSystem:
             self.current_batch = batch_index + 1
             self.logger.info(f"Processing batch {self.current_batch}/{self.total_batches} ({len(batch)} sets)")
             
-            if not self._process_single_batch_basic(batch):
-                self.logger.error(f"Failed to process batch {self.current_batch}")
-                self.processing_stats["failed_batches"] += 1
-                return False
+            # Call progress callback if available
+            if self.progress_callback:
+                self.progress_callback(self.current_batch, self.total_batches, 0, len(batch), 'processing')
             
-            self.processing_stats["successful_batches"] += 1
-            self.processing_stats["processed_sets"] += len(batch)
+            # Attempt batch processing with retry mechanism
+            batch_success = False
+            retry_count = 0
+            
+            while not batch_success and retry_count <= self.max_retries:
+                try:
+                    if retry_count > 0:
+                        self.logger.info(f"🔄 Retry attempt {retry_count}/{self.max_retries} for batch {self.current_batch}")
+                        self.processing_stats["retry_attempts"] += 1
+                        
+                        # Update progress callback for retry
+                        if self.progress_callback:
+                            self.progress_callback(self.current_batch, self.total_batches, 0, len(batch), 'waiting')
+                        
+                        # Wait before retry
+                        time.sleep(self.retry_delay)
+                        
+                        # Try to recover by taking screenshot and refreshing if needed
+                        if self.error_recovery_enabled:
+                            self._attempt_error_recovery()
+                    
+                    if self._process_single_batch_basic(batch):
+                        batch_success = True
+                        self.processing_stats["successful_batches"] += 1
+                        self.processing_stats["processed_sets"] += len(batch)
+                        self.logger.info(f"✅ Batch {self.current_batch} completed successfully")
+                        
+                        if retry_count > 0:
+                            self.processing_stats["recovered_errors"] += 1
+                            self.logger.info(f"🚑 Error recovery successful after {retry_count} retries")
+                        
+                        # Update progress callback for completion
+                        if self.progress_callback:
+                            self.progress_callback(self.current_batch, self.total_batches, len(batch), len(batch), 'completed')
+                    else:
+                        retry_count += 1
+                        if retry_count <= self.max_retries:
+                            self.logger.warning(f"⚠️ Batch {self.current_batch} failed, attempting retry {retry_count}/{self.max_retries}")
+                        
+                except Exception as e:
+                    retry_count += 1
+                    self.logger.error(f"❌ Batch {self.current_batch} failed with exception: {e}")
+                    if retry_count <= self.max_retries:
+                        self.logger.warning(f"⚠️ Attempting retry {retry_count}/{self.max_retries}")
+            
+            # Handle final failure
+            if not batch_success:
+                self.logger.error(f"❌ Batch {self.current_batch} failed after {self.max_retries} retries")
+                self.processing_stats["failed_batches"] += 1
+                
+                # Update progress callback for final failure
+                if self.progress_callback:
+                    self.progress_callback(self.current_batch, self.total_batches, 0, len(batch), 'error')
             
             # Pause between batches
             if batch_index < len(batches) - 1:
@@ -400,7 +551,14 @@ class EnhancedAutomationSystem:
         self.processing_stats["end_time"] = time.time()
         self._log_processing_summary()
         
-        return True
+        # Return success if at least one batch was processed successfully
+        success = self.processing_stats["successful_batches"] > 0
+        if success:
+            self.logger.info(f"🎉 Batch processing completed: {self.processing_stats['successful_batches']}/{self.total_batches} successful")
+        else:
+            self.logger.error("❌ No batches were processed successfully")
+        
+        return success
     
     def _fill_form_batch(self, batch_data: List[List[int]]) -> bool:
         """Fill form with batch data"""
@@ -427,11 +585,39 @@ class EnhancedAutomationSystem:
         return True
     
     def _process_single_batch_basic(self, batch_data: List[List[int]]) -> bool:
-        """Process single batch using basic method"""
+        """Process single batch using basic method with enhanced loop handling"""
         try:
+            # For batches after the first, we need to navigate from addition page
+            if self.current_batch > 1:
+                self.logger.info("🔄 Navigating from voting addition page to single voting page...")
+                
+                # Update progress for navigation
+                if self.progress_callback:
+                    self.progress_callback(self.current_batch, self.total_batches, 0, len(batch_data), 'navigation')
+                
+                # Step 1: Click the round link on addition page
+                if not self.round_selector.click_round_link_on_addition_page():
+                    self.logger.error("❌ Failed to click round link on addition page")
+                    return False
+                self.logger.info("✅ Clicked round link on addition page")
+                
+                # Step 2: Click single button to go to voting page
+                if not self.round_selector.click_single_button():
+                    self.logger.error("❌ Failed to click single button")
+                    return False
+                self.logger.info("✅ Clicked single button - ready for voting")
+            
+            # Update progress for form input
+            if self.progress_callback:
+                self.progress_callback(self.current_batch, self.total_batches, 0, len(batch_data), 'input')
+            
             # Fill the voting form
             if not self.form_filler.fill_voting_form(batch_data):
                 return False
+            
+            # Update progress for cart addition
+            if self.progress_callback:
+                self.progress_callback(self.current_batch, self.total_batches, len(batch_data), len(batch_data), 'cart')
             
             # Submit the form
             if not self.form_filler.submit_form():
@@ -440,18 +626,11 @@ class EnhancedAutomationSystem:
             # Handle any alerts
             self.webdriver_manager.handle_alert(accept=True)
             
-            # Skip confirm_submission for cart scenarios - navigation handles this
-            # self.form_filler.confirm_submission()  # Disabled - causes redirect to wrong page
-            
-            # Navigate to next form or return to voting page for next batch selection
-            # Always try to navigate back to allow for next batch processing
-            if not self.form_filler.navigate_to_next_form():
-                # Try to navigate to cart page navigation as fallback
-                if hasattr(self.form_filler, '_handle_cart_page_navigation'):
-                    if not self.form_filler._handle_cart_page_navigation():
-                        self.logger.warning("Failed to navigate back for next batch - batch processing may be incomplete")
-                else:
-                    self.logger.warning("Could not navigate to next form - batch processing may be incomplete")
+            # For the last batch, no need to navigate back
+            if self.current_batch == self.total_batches:
+                self.logger.info("🏁 Last batch completed - no navigation needed")
+            else:
+                self.logger.info("🔄 Preparing for next batch (will handle navigation in next iteration)...")
             
             return True
             

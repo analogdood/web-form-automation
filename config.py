@@ -15,6 +15,9 @@ class Config:
     BROWSER = "edge"  # chrome, firefox, edge
     WINDOW_SIZE = (1920, 1080)
     
+    # URL settings
+    START_URL = "https://www.toto-dream.com/toto/index.html"
+    
     # Form processing settings - 13 games × 10 sets (trusting user input over debug)
     MAX_SETS_PER_BATCH = 10  # 10 sets (0-9)
     MAX_GAMES_PER_SET = 13   # 13 games (0-12) - user confirms 13 games exist
