@@ -79,7 +79,7 @@ class CompleteTotoAutomation:
             logger.error(f"❌ System initialization failed: {e}")
             return False
     
-    def execute_complete_workflow(self, csv_path: str, round_number: str = None) -> bool:
+    def execute_complete_workflow(self, csv_path: str, round_number: Optional[str] = None) -> bool:
         """
         Execute the complete automation workflow
         
@@ -95,7 +95,8 @@ class CompleteTotoAutomation:
             logger.info("🏁 STARTING COMPLETE TOTO AUTOMATION WORKFLOW")
             logger.info("=" * 60)
             
-            self.stats["start_time"] = time.time()
+            # Store as int to satisfy strict typing of stats dict
+            self.stats["start_time"] = int(time.time())
             
             # Step 1: Initialize system
             logger.info("📍 STEP 1: Initialize System")
@@ -164,10 +165,15 @@ class CompleteTotoAutomation:
             logger.error(f"❌ Error loading betting data: {e}")
             return False
     
-    def _navigate_and_select_round(self, round_number: str = None) -> bool:
+    def _navigate_and_select_round(self, round_number: Optional[str] = None) -> bool:
         """Navigate to toto site and select round"""
         try:
             logger.info("🧭 Starting navigation and round selection...")
+
+            # Ensure components are initialized (helps static analyzers and avoids None access)
+            assert self.round_selector is not None, "Round selector not initialized"
+            assert self.webdriver_manager is not None, "WebDriver manager not initialized"
+            assert getattr(self.webdriver_manager, "driver", None) is not None, "WebDriver not initialized"
             
             if round_number:
                 logger.info(f"🎯 Target round: 第{round_number}回")
@@ -229,6 +235,12 @@ class CompleteTotoAutomation:
                 logger.error("❌ Voting page not ready")
                 return False
             
+            # Ensure components are initialized before use
+            assert self.data_handler is not None, "Data handler not initialized"
+            assert self.form_filler is not None, "Form filler not initialized"
+            assert self.round_selector is not None, "Round selector not initialized"
+            assert self.webdriver_manager is not None, "WebDriver manager not initialized"
+
             # Get data batches
             batches = self.data_handler.split_data_into_batches()
             if not batches:
@@ -329,16 +341,17 @@ class CompleteTotoAutomation:
     
     def _log_final_summary(self):
         """Log final automation summary"""
-        self.stats["end_time"] = time.time()
+        # Store as int to satisfy strict typing of stats dict
+        self.stats["end_time"] = int(time.time())
         duration = self.stats["end_time"] - self.stats["start_time"]
-        
+
         logger.info("=" * 60)
         logger.info("📊 COMPLETE TOTO AUTOMATION SUMMARY")
         logger.info("=" * 60)
-        
+
         if self.current_round_info:
             logger.info(f"🎯 Selected Round: {self.current_round_info['round_text']}")
-        
+
         logger.info(f"📦 Total Batches: {self.stats['total_batches']}")
         logger.info(f"✅ Successful Batches: {self.stats['successful_batches']}")
         logger.info(f"❌ Failed Batches: {self.stats['failed_batches']}")
@@ -401,4 +414,5 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import sys as _sys
+    _sys.exit(main())
