@@ -14,20 +14,27 @@ from web_driver_manager import WebDriverManager
 from toto_round_selector import TotoRoundSelector
 from form_filler import FormFiller
 from data_handler import DataHandler
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 logger = logging.getLogger(__name__)
+
+LOGIN_URL = "https://store.toto-dream.com/dcs/subos/screen/pm01/spmb000/PGSPMB00001Init.form"
 
 class CompleteTotoAutomation:
     """Complete end-to-end toto automation workflow"""
     
     def __init__(self, headless: bool = False, timeout: int = 15, keep_browser_open: bool = True,
-                 show_end: bool = False, username: Optional[str] = None, password: Optional[str] = None):
+                 username: str | None = None, password: str | None = None,
+                 show_end: bool = False):
         self.headless = headless
         self.timeout = timeout
         self.keep_browser_open = keep_browser_open
-        self.show_end = show_end
         self.username = username
         self.password = password
+        self.show_end = show_end
+        self.logged_in: bool = False
         
         # Components
         self.webdriver_manager = None
@@ -84,7 +91,78 @@ class CompleteTotoAutomation:
             logger.error(f"❌ System initialization failed: {e}")
             return False
     
-    def execute_complete_workflow(self, csv_path: str, round_number: Optional[str] = None) -> bool:
+    def _login_if_needed(self, timeout: int | None = None) -> bool:
+        """
+        資格情報があればログイン画面で自動ログイン（STEP1完了直後に実行）。
+        既にログイン済みなら何もしない。
+        """
+        if self.logged_in or not (self.username and self.password):
+            return True
+
+        driver = getattr(self, "driver", None) or getattr(self, "driver_manager", None).driver
+        to = timeout or getattr(self, "timeout", 15)
+
+        try:
+            self.logger.info("🔐 ログインを開始します...")
+            driver.get(LOGIN_URL)
+
+            WebDriverWait(driver, to).until(
+                lambda d: "PGSPMB00001" in d.current_url or "login" in d.current_url.lower()
+            )
+
+            def _first_enabled(elems):
+                return next((e for e in elems if e.is_displayed() and e.is_enabled()), None)
+
+            id_candidates = ("memberId", "loginId", "username", "userId")
+            pw_candidates = ("password", "passwd", "pass")
+
+            uid = None
+            for k in id_candidates:
+                uid = _first_enabled(driver.find_elements(By.NAME, k) + driver.find_elements(By.ID, k))
+                if uid:
+                    break
+
+            pwd = None
+            for k in pw_candidates:
+                pwd = _first_enabled(driver.find_elements(By.NAME, k) + driver.find_elements(By.ID, k))
+                if pwd:
+                    break
+
+            if not uid or not pwd:
+                self.logger.warning("ログイン入力欄を検出できませんでした")
+                return False
+
+            uid.clear(); uid.send_keys(self.username)
+            pwd.clear(); pwd.send_keys(self.password)
+
+            btn_candidates = [
+                (By.ID, "login"),
+                (By.NAME, "login"),
+                (By.XPATH, "//button[contains(., 'ログイン')]"),
+                (By.XPATH, "//input[@type='submit' and (contains(@value,'ログイン') or contains(@value,'login'))]"),
+            ]
+            clicked = False
+            for by, loc in btn_candidates:
+                try:
+                    btn = WebDriverWait(driver, 3).until(EC.element_to_be_clickable((by, loc)))
+                    btn.click()
+                    clicked = True
+                    break
+                except Exception:
+                    continue
+            if not clicked:
+                pwd.submit()
+
+            # ログイン画面から離脱すれば成功
+            WebDriverWait(driver, to).until(lambda d: "PGSPMB00001" not in d.current_url)
+            self.logged_in = True
+            self.logger.info("✅ 自動ログインに成功しました")
+            return True
+        except Exception as e:
+            self.logger.warning(f"自動ログインに失敗: {e}")
+            return False
+
+    def execute_complete_workflow(self, csv_path: str, round_number: str | None = None) -> bool:
         """
         Execute the complete automation workflow
         
@@ -108,6 +186,13 @@ class CompleteTotoAutomation:
             if not self.initialize_system():
                 return False
             logger.info("✅ STEP 1 COMPLETED: System initialized")
+            
+            try:
+                if self.username and self.password:
+                    self._login_if_needed()
+            except Exception as _e:
+                # ログだけ残して続行（後段でログインページに飛ばされても再トライ可）
+                logger.warning(f"ログイン試行をスキップ/失敗: {_e}")
             
             # Step 2: Load betting data
             logger.info("📍 STEP 2: Load Betting Data")
