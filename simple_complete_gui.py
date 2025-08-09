@@ -87,7 +87,6 @@ class CompleteWorkflowGUI:
         self.timeout_var = tk.IntVar(value=15)
         self.username_var = tk.StringVar()
         self.password_var = tk.StringVar()
-        self.show_password_var = tk.BooleanVar(value=False)
         self.show_end_var = tk.BooleanVar(value=False)
 
         # Prefill from environment if present (so user can copy immediately)
@@ -148,10 +147,9 @@ class CompleteWorkflowGUI:
         ttk.Button(login_frame, text="コピー", command=self._copy_username).grid(row=0, column=2, sticky=tk.W, padx=(0, 8))
 
         ttk.Label(login_frame, text="パスワード:").grid(row=1, column=0, sticky=tk.E, padx=(8, 4), pady=(0, 8))
-        self.password_entry = ttk.Entry(login_frame, textvariable=self.password_var, width=32, show="•")
+        self.password_entry = ttk.Entry(login_frame, textvariable=self.password_var, width=32)
         self.password_entry.grid(row=1, column=1, sticky=tk.W, padx=(0, 4), pady=(0, 8))
         ttk.Button(login_frame, text="コピー", command=self._copy_password).grid(row=1, column=2, sticky=tk.W, padx=(0, 8), pady=(0, 8))
-        ttk.Checkbutton(login_frame, text="表示", variable=self.show_password_var, command=self._toggle_password_visibility).grid(row=1, column=3, sticky=tk.W)
 
         # Controls
         ctrl_frame = ttk.Frame(frm)
@@ -290,14 +288,6 @@ class CompleteWorkflowGUI:
         except Exception:
             pass
 
-    def _toggle_password_visibility(self) -> None:
-        try:
-            if self.show_password_var.get():
-                self.password_entry.configure(show="")
-            else:
-                self.password_entry.configure(show="•")
-        except Exception:
-            pass
 
     def _on_finished(self) -> None:
         self.running = False
