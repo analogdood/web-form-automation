@@ -39,6 +39,19 @@ class TotoRoundSelector:
         """
         try:
             logger.info(f"Navigating to start page: {start_url}")
+            # If driver session is invalid (e.g., after fallback), try to recover
+            try:
+                from web_driver_manager import WebDriverManager  # avoid cycle at import time
+                # If driver is actually a WebDriver, probe current_url; on failure, we let retry below handle
+                _ = self.driver.current_url  # probe access
+            except Exception:
+                # Attempt a light recovery via a helper if available in context
+                try:
+                    # In most code paths, driver comes from WebDriverManager; here we cannot access it directly
+                    # So we just proceed; the outer automation may call restart when needed
+                    logger.debug("Driver session probe failed; proceeding with navigation attempts")
+                except Exception:
+                    pass
             attempts = 0
             max_attempts = 3
             timeout = getattr(Config, "WEBDRIVER_TIMEOUT", 10)

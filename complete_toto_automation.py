@@ -184,6 +184,19 @@ class CompleteTotoAutomation:
             assert self.round_selector is not None, "Round selector not initialized"
             assert self.webdriver_manager is not None, "WebDriver manager not initialized"
             assert getattr(self.webdriver_manager, "driver", None) is not None, "WebDriver not initialized"
+
+            # Validate session and auto-restart if needed
+            try:
+                if hasattr(self.webdriver_manager, "is_session_valid") and not self.webdriver_manager.is_session_valid():
+                    logger.warning("WebDriver session invalid. Attempting restart...")
+                    if not self.webdriver_manager.restart_driver():
+                        logger.error("Failed to restart WebDriver session")
+                        return False
+                    # Recreate round selector with new driver
+                    self.round_selector = TotoRoundSelector(self.webdriver_manager.driver)
+                    logger.info("Reinitialized round selector after driver restart")
+            except Exception as _serr:
+                logger.debug(f"Session validation skipped: {_serr}")
             
             if round_number:
                 logger.info(f"🎯 Target round: 第{round_number}回")

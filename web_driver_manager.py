@@ -12,6 +12,7 @@ from selenium.common.exceptions import (
     NoSuchElementException,
     WebDriverException,
     ElementNotInteractableException,
+    InvalidSessionIdException,
 )
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service as ChromeService
@@ -374,6 +375,35 @@ class WebDriverManager:
             finally:
                 self.driver = None
                 self.wait = None
+
+    # --- Session health helpers ---
+    def is_session_valid(self) -> bool:
+        """Check if current WebDriver session is alive."""
+        try:
+            if not self.driver:
+                return False
+            # A lightweight command to test session
+            _ = self.driver.current_url  # type: ignore[unused-ignore]
+            return True
+        except InvalidSessionIdException:
+            return False
+        except WebDriverException:
+            return False
+        except Exception:
+            return False
+
+    def restart_driver(self) -> bool:
+        """Restart WebDriver session (quit then setup)."""
+        try:
+            logger.warning("Restarting WebDriver due to invalid session or error...")
+            self.quit_driver()
+            ok = self.setup_driver()
+            if ok:
+                logger.info("WebDriver restarted successfully")
+            return ok
+        except Exception as e:
+            logger.error(f"Failed to restart WebDriver: {e}")
+            return False
 
     # --- Unexpected popup helpers ---
     def close_unexpected_popups(self, max_iframes: int = 5) -> int:
