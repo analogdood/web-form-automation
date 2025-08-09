@@ -42,7 +42,18 @@ except ImportError as e:
         def list_action_files(self):
             return []
     class TotoRoundSelector:
-        pass
+        def __init__(self, driver=None):
+            pass
+        def select_round_by_number(self, rounds, round_number):
+            return False
+        def navigate_to_start_page(self, url: str):
+            return False
+        def detect_toto_rounds(self):
+            return []
+        def click_voting_prediction_button(self):
+            return False
+        def click_single_button(self):
+            return False
     class CompleteTotoAutomation:
         pass
 
@@ -1580,7 +1591,16 @@ class EnhancedAutomationGUI:
             else:
                 filter_info = ""
             
-            if recommended_round:
+            if csv_matched_round:
+                # Prefer CSV filename match in the message
+                message = (
+                    f"✅ Found {len(valid_rounds)} valid round(s){filter_info}\n\n"
+                    f"🎯 CSV match: {csv_matched_round[0]} (auto-continue in 2s)\n\n"
+                    "Options:\n"
+                    "• Change selection if needed, or wait to auto-continue\n"
+                    "• You can also click 'Continue Workflow' now"
+                )
+            elif recommended_round:
                 message = (
                     f"✅ Found {len(valid_rounds)} valid round(s){filter_info}\n\n"
                     f"🎯 Auto-selected: {recommended_round[0]} (latest)\n\n"
@@ -1680,7 +1700,7 @@ class EnhancedAutomationGUI:
             'ready': '待機中'
         }
         
-        message = stage_messages.get(stage, stage)
+    message = stage_messages.get(stage, str(stage)) or str(stage)
         self.workflow_progress.config(text=message)
         
         if progress_percent is not None:
