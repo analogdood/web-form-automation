@@ -122,29 +122,28 @@ class WebDriverManager:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--window-size=1920,1080")
+        # Prefer system EdgeDriver first (fast), avoid network in offline environments
         try:
-            # Try to download EdgeDriver
-            service = EdgeService(EdgeChromiumDriverManager().install())
-        except Exception as e:
-            logger.warning(f"Failed to auto-download EdgeDriver: {e}")
-            logger.info("Attempting to use system EdgeDriver...")
-            # Try to use system-installed EdgeDriver
+            service = EdgeService()
+            self.driver = webdriver.Edge(service=service, options=options)
+            return
+        except Exception as system_err:
+            logger.warning(f"System EdgeDriver not available: {system_err}")
+            # Try auto-download only if network allows; otherwise, fall back quickly to Chrome
             try:
-                service = EdgeService()
+                service = EdgeService(EdgeChromiumDriverManager().install())
                 self.driver = webdriver.Edge(service=service, options=options)
                 return
-            except Exception as system_err:
-                logger.error(f"System EdgeDriver also failed: {system_err}")
+            except Exception as e:
+                logger.warning(f"Failed to auto-download EdgeDriver: {e}")
                 logger.info("Edge WebDriver unavailable, falling back to Chrome...")
-                # Fallback to Chrome if Edge fails
                 try:
                     self._setup_chrome_driver()
                     return
                 except Exception as chrome_err:
                     raise Exception(
-                        f"All WebDriver options failed. Edge auto-download: {e}, Edge system: {system_err}, Chrome fallback: {chrome_err}"
+                        f"All WebDriver options failed. Edge system: {system_err}, Edge auto-download: {e}, Chrome fallback: {chrome_err}"
                     )
-        self.driver = webdriver.Edge(service=service, options=options)
     
     def navigate_to_url(self, url: str) -> bool:
         """

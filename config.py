@@ -12,7 +12,7 @@ class Config:
     HEADLESS_MODE = False
     
     # Browser settings
-    BROWSER = "edge"  # chrome, firefox, edge
+    BROWSER = "chrome"  # chrome, firefox, edge
     WINDOW_SIZE = (1920, 1080)
     
     # URL settings
