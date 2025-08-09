@@ -403,6 +403,11 @@ class FormFiller:
             # Only analyze a reasonable number of elements to reduce log spam
             elements_to_analyze = min(len(unique_clickables), 100)  # Limit to 100 elements max
             
+            # Negative texts we must avoid (view/confirm cart)
+            negative_cart_texts = [
+                '購入カートを確認', 'カートを確認', 'カート確認', '確認', '確認する', 'view', 'チェック', '確認へ'
+            ]
+
             for i, btn in enumerate(unique_clickables[:elements_to_analyze]):
                 try:
                     btn_text = btn.get_attribute('value') or btn.text or 'no-text'
@@ -429,6 +434,9 @@ class FormFiller:
                         not ('header' in btn_class.lower() or 'nav' in btn_class.lower() or
                              'l-header' in btn_class.lower() or 'main-nav' in btn_class.lower())
                     )
+                    # Exclude confirm/view-cart variants by text
+                    if is_cart_button and any(neg in btn_text for neg in negative_cart_texts):
+                        is_cart_button = False
                     
                     # Only log cart button candidates to reduce log spam
                     if is_cart_button:
@@ -1087,9 +1095,33 @@ class FormFiller:
             except Exception:
                 pass
 
-            # Method 1: Try direct candidates from analysis
+            # Sort candidates to prioritize true '追加' buttons and known classes, de-prioritize anything with '確認'
+            def score_candidate(btn, text: str) -> int:
+                t = text or ''
+                cls = (btn.get_attribute('class') or '').lower()
+                onclick = (btn.get_attribute('onclick') or '').lower()
+                score = 0
+                if '購入カートに追加' in t:
+                    score += 100
+                if 'カートに追加' in t:
+                    score += 80
+                if '追加' in t:
+                    score += 60
+                if 'kounyu_cart' in cls or 'kounyu_cart_multiline_base' in cls:
+                    score += 50
+                if 'cart' in onclick or 'add' in onclick:
+                    score += 20
+                # Strongly penalize confirm/view variants
+                for neg in ['購入カートを確認','カートを確認','カート確認','確認','確認する','view','チェック','確認へ']:
+                    if neg in t:
+                        score -= 1000
+                return score
+
+            sorted_candidates = sorted(cart_button_candidates, key=lambda tup: score_candidate(tup[1], tup[2]), reverse=True)
+
+            # Method 1: Try direct candidates from analysis (sorted by priority)
             logger.info("🎯 Method 1: Trying direct cart button candidates...")
-            for i, (index, btn, text) in enumerate(cart_button_candidates):
+            for i, (index, btn, text) in enumerate(sorted_candidates):
                 try:
                     if btn.is_displayed() and btn.is_enabled():
                         logger.info(f"Attempting to click candidate {i}: '{text}'")
@@ -1162,6 +1194,10 @@ class FormFiller:
                     for element in elements:
                         if element.is_displayed() and element.is_enabled():
                             element_text = element.get_attribute('value') or element.text or 'no-text'
+                            # Skip confirm/view-cart variants
+                            if any(neg in element_text for neg in ['購入カートを確認','カートを確認','カート確認','確認','確認する','view','チェック','確認へ']):
+                                logger.debug(f"Skipping non-add cart button: '{element_text}'")
+                                continue
                             logger.info(f"Trying XPath cart button: '{element_text}'")
                             try:
                                 self.driver.execute_script("arguments[0].scrollIntoView({behavior:'instant',block:'center'});", element)
