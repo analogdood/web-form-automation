@@ -82,7 +82,6 @@ class CompleteWorkflowGUI:
         self.timeout_var = tk.IntVar(value=15)
         self.username_var = tk.StringVar()
         self.password_var = tk.StringVar()
-        self.show_end_var = tk.BooleanVar(value=False)
 
         # Set login credentials for easy copy-paste (edit these lines directly)
         self.username_var.set("00000931526")  # ← ここを編集
@@ -127,7 +126,6 @@ class CompleteWorkflowGUI:
         ttk.Label(opt_frame, text="タイムアウト(s):").grid(row=0, column=1, sticky=tk.E, padx=(16, 4))
         ttk.Spinbox(opt_frame, from_=5, to=60, textvariable=self.timeout_var, width=6).grid(row=0, column=2, sticky=tk.W)
         ttk.Checkbutton(opt_frame, text="完了後にブラウザを閉じない", variable=self.keep_open_var).grid(row=0, column=3, sticky=tk.W, padx=(16, 8))
-        ttk.Checkbutton(opt_frame, text="完了時に可視ブラウザで表示（ヘッドレス向け）", variable=self.show_end_var).grid(row=0, column=4, sticky=tk.W, padx=(16, 8))
 
         # Login info
         login_frame = ttk.LabelFrame(frm, text="ログイン情報（任意・コピペ用）")
@@ -221,27 +219,26 @@ class CompleteWorkflowGUI:
         self.running = True
         self.start_btn.configure(state=tk.DISABLED)
         self.status_var.set("実行中...")
-        # Optional credentials and show-end
+        # Optional credentials
         username = self.username_var.get().strip() or None
         password = self.password_var.get().strip() or None
-        show_end = bool(self.show_end_var.get())
 
         t = threading.Thread(
             target=self._run_workflow,
-            args=(csv_path, round_number, headless, timeout, keep_open, username, password, show_end),
+            args=(csv_path, round_number, headless, timeout, keep_open, username, password),
             daemon=True,
         )
         self.worker = t
         t.start()
 
-    def _run_workflow(self, csv_path: str, round_number: str | None, headless: bool, timeout: int, keep_open: bool, username: str | None, password: str | None, show_end: bool) -> None:
+    def _run_workflow(self, csv_path: str, round_number: str | None, headless: bool, timeout: int, keep_open: bool, username: str | None, password: str | None) -> None:
         try:
             logging.info("Starting Complete Workflow...")
             automation = CompleteTotoAutomation(
                 headless=headless,
                 timeout=timeout,
                 keep_browser_open=keep_open,
-                show_end=show_end,
+                show_end=False,
                 username=username,
                 password=password,
             )
@@ -251,7 +248,7 @@ class CompleteWorkflowGUI:
                 def _done_msg():
                     if keep_open:
                         return "全バッチの処理が完了しました。ブラウザは開いたままです。"
-                    if show_end:
+                    if headless:
                         return "全バッチの処理が完了しました。完了ページを可視ブラウザで表示しました。"
                     return "全バッチの処理が完了しました。"
                 self.root.after(0, lambda: messagebox.showinfo("完了", _done_msg()))
