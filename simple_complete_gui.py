@@ -4,7 +4,7 @@ Simple GUI focused on running ONLY the Complete Workflow.
 
 - Select a CSV file
 - Choose round selection (Auto from filename / Specify / Latest)
-- Optional headless mode
+- Optional headless mode and keep-open option
 - Start and watch logs
 """
 from __future__ import annotations
@@ -14,8 +14,14 @@ import queue
 import re
 import threading
 from pathlib import Path
+import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+# Ensure local imports work even in isolated mode
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from complete_toto_automation import CompleteTotoAutomation
 
@@ -35,7 +41,7 @@ class TkTextHandler(logging.Handler):
         try:
             msg = self.format(record)
             self.queue.put(msg + "\n")
-        except Exception:  # noqa: BLE001 - guard logging errors
+        except Exception:
             pass
 
     def _poll(self) -> None:
@@ -62,19 +68,20 @@ class CompleteWorkflowGUI:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("TotoKN - Complete Workflow")
-        self.root.geometry("760x560")
+        self.root.geometry("780x600")
 
         # State vars
         self.csv_path_var = tk.StringVar()
         self.round_mode_var = tk.StringVar(value="auto")  # auto | manual | latest
         self.round_manual_var = tk.StringVar()
         self.headless_var = tk.BooleanVar(value=False)
+        self.keep_open_var = tk.BooleanVar(value=True)
         self.timeout_var = tk.IntVar(value=15)
 
         self._build_ui()
         self._configure_logging()
 
-        self.worker: threading.Thread | None = None
+        self.worker = None  # type: threading.Thread | None
         self.running = False
 
     def _build_ui(self) -> None:
@@ -108,6 +115,7 @@ class CompleteWorkflowGUI:
         ttk.Checkbutton(opt_frame, text="ヘッドレス（画面非表示）", variable=self.headless_var).grid(row=0, column=0, sticky=tk.W, padx=8, pady=8)
         ttk.Label(opt_frame, text="タイムアウト(s):").grid(row=0, column=1, sticky=tk.E, padx=(16, 4))
         ttk.Spinbox(opt_frame, from_=5, to=60, textvariable=self.timeout_var, width=6).grid(row=0, column=2, sticky=tk.W)
+        ttk.Checkbutton(opt_frame, text="完了後にブラウザを閉じない", variable=self.keep_open_var).grid(row=0, column=3, sticky=tk.W, padx=(16, 8))
 
         # Controls
         ctrl_frame = ttk.Frame(frm)
@@ -121,20 +129,17 @@ class CompleteWorkflowGUI:
         # Logs
         log_frame = ttk.LabelFrame(frm, text="ログ")
         log_frame.pack(fill=tk.BOTH, expand=True)
-        self.log_text = tk.Text(log_frame, wrap=tk.NONE, height=20, state=tk.DISABLED)
+        self.log_text = tk.Text(log_frame, wrap=tk.NONE, height=22, state=tk.DISABLED)
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
     def _configure_logging(self) -> None:
         logger = logging.getLogger()
         logger.setLevel(logging.INFO)
-        # Console formatter
         fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        # StreamHandler to console (optional)
         if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
             sh = logging.StreamHandler()
             sh.setFormatter(fmt)
             logger.addHandler(sh)
-        # Tk handler
         tkh = TkTextHandler(self.log_text)
         tkh.setFormatter(fmt)
         logger.addHandler(tkh)
@@ -185,25 +190,28 @@ class CompleteWorkflowGUI:
 
         headless = bool(self.headless_var.get())
         timeout = int(self.timeout_var.get())
+        keep_open = bool(self.keep_open_var.get())
 
         # Run in background thread
         self.running = True
         self.start_btn.configure(state=tk.DISABLED)
         self.status_var.set("実行中...")
-        t = threading.Thread(target=self._run_workflow, args=(csv_path, round_number, headless, timeout), daemon=True)
+        t = threading.Thread(target=self._run_workflow, args=(csv_path, round_number, headless, timeout, keep_open), daemon=True)
         self.worker = t
         t.start()
 
-    def _run_workflow(self, csv_path: str, round_number: str | None, headless: bool, timeout: int) -> None:
+    def _run_workflow(self, csv_path: str, round_number: str | None, headless: bool, timeout: int, keep_open: bool) -> None:
         try:
             logging.info("Starting Complete Workflow...")
-            automation = CompleteTotoAutomation(headless=headless, timeout=timeout)
+            automation = CompleteTotoAutomation(headless=headless, timeout=timeout, keep_browser_open=keep_open)
             ok = automation.execute_complete_workflow(csv_path, round_number)
             if ok:
                 logging.info("✅ 完了: すべてのバッチが処理されました。")
+                self.root.after(0, lambda: messagebox.showinfo("完了", "全バッチの処理が完了しました。ブラウザは開いたままです。" if keep_open else "全バッチの処理が完了しました。"))
             else:
                 logging.error("❌ 失敗: ワークフローに失敗しました。ログを確認してください。")
-        except Exception as e:  # noqa: BLE001
+                self.root.after(0, lambda: messagebox.showerror("失敗", "ワークフローに失敗しました。ログを確認してください。"))
+        except Exception as e:
             logging.exception(f"Unexpected error: {e}")
         finally:
             self.root.after(0, self._on_finished)

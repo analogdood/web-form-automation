@@ -27,6 +27,8 @@ from config import Config
 import time
 from typing import Optional, List, Union
 from selenium.webdriver.remote.webelement import WebElement
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +349,95 @@ class WebDriverManager:
             finally:
                 self.driver = None
                 self.wait = None
+
+    # --- Unexpected popup helpers ---
+    def close_unexpected_popups(self, max_iframes: int = 5) -> int:
+        """
+        Try to close common unexpected modals/popups/overlays including alerts.
+
+        Returns: number of popups likely handled
+        """
+        handled = 0
+        try:
+            # Alerts first
+            if self.handle_alert(accept=True):
+                handled += 1
+        except Exception:
+            pass
+
+        driver = self.driver
+        wait = self.wait
+        assert driver is not None
+        assert wait is not None
+
+        # Candidate selectors (CSS or XPath)
+        selectors: List[str] = [
+            # CSS close buttons
+            "[aria-label='close']",
+            "[aria-label='Close']",
+            "[data-testid*='close']",
+            "button.close",
+            "button[title*='閉じ']",
+            "button[aria-label*='閉じ']",
+            "[class*='close']",
+            ".modal .close",
+            ".popup .close",
+            ".overlay .close",
+            ".dialog .close",
+            # XPath text-based
+            "//button[contains(normalize-space(),'閉じる')]",
+            "//a[contains(normalize-space(),'閉じる')]",
+            "//*[text()='×' or text()='✕']",
+        ]
+
+        def try_close_in_context() -> int:
+            c = 0
+            for sel in selectors:
+                try:
+                    if sel.startswith("//"):
+                        elem = wait.until(EC.element_to_be_clickable((By.XPATH, sel)))
+                    else:
+                        elem = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
+                    elem.click()
+                    logger.info(f"Closed a popup using selector: {sel}")
+                    c += 1
+                except Exception:
+                    continue
+            # Try ESC as generic dismiss
+            try:
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            except Exception:
+                pass
+            return c
+
+        # Default content
+        try:
+            handled += try_close_in_context()
+        except Exception:
+            pass
+
+        # Look into iframes
+        try:
+            iframes = driver.find_elements(By.CSS_SELECTOR, "iframe")
+            for i, frame in enumerate(iframes[:max_iframes]):
+                try:
+                    driver.switch_to.frame(frame)
+                    handled += try_close_in_context()
+                except Exception:
+                    continue
+                finally:
+                    try:
+                        driver.switch_to.default_content()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        if handled:
+            logger.info(f"Unexpected popups handled: {handled}")
+        else:
+            logger.debug("No unexpected popups found")
+        return handled
     
     def __enter__(self):
         """Context manager entry"""
