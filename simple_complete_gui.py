@@ -14,6 +14,7 @@ import queue
 import re
 import threading
 from pathlib import Path
+import os
 import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -24,6 +25,13 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from complete_toto_automation import CompleteTotoAutomation
+
+# Load environment variables from .env if available (for default credentials)
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
 
 
 class TkTextHandler(logging.Handler):
@@ -81,6 +89,14 @@ class CompleteWorkflowGUI:
         self.password_var = tk.StringVar()
         self.show_password_var = tk.BooleanVar(value=False)
         self.show_end_var = tk.BooleanVar(value=False)
+
+        # Prefill from environment if present (so user can copy immediately)
+        uname = os.getenv("TOTO_USERNAME") or os.getenv("TOTO_USER") or ""
+        pword = os.getenv("TOTO_PASSWORD") or os.getenv("TOTO_PASS") or ""
+        if uname:
+            self.username_var.set(uname)
+        if pword:
+            self.password_var.set(pword)
 
         self._build_ui()
         self._configure_logging()
