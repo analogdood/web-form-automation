@@ -250,9 +250,10 @@ class CompleteTotoAutomation:
             # Final summary
             self._log_final_summary()
 
-            # Optionally open the final page in a visible browser with the same session
+            # 完了後の表示: ヘッドレス時は常に可視ブラウザで開く（show_end は任意の追加条件として残す）
             try:
-                if self.show_end:
+                if self.headless or self.show_end:
+                    logger.info("🪟 Opening final page in a visible browser (forced by headless)")
                     self._show_end_in_visible_browser()
             except Exception as _end_err:
                 logger.warning(f"Show-end step failed: {_end_err}")
