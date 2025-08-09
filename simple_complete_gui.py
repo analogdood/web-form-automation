@@ -77,11 +77,16 @@ class CompleteWorkflowGUI:
         self.headless_var = tk.BooleanVar(value=False)
         self.keep_open_var = tk.BooleanVar(value=True)
         self.timeout_var = tk.IntVar(value=15)
+        self.username_var = tk.StringVar()
+        self.password_var = tk.StringVar()
+        self.show_password_var = tk.BooleanVar(value=False)
+        self.show_end_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._configure_logging()
 
-        self.worker = None  # type: threading.Thread | None
+        # Background worker thread handle
+        self.worker = None
         self.running = False
 
     def _build_ui(self) -> None:
@@ -116,6 +121,21 @@ class CompleteWorkflowGUI:
         ttk.Label(opt_frame, text="タイムアウト(s):").grid(row=0, column=1, sticky=tk.E, padx=(16, 4))
         ttk.Spinbox(opt_frame, from_=5, to=60, textvariable=self.timeout_var, width=6).grid(row=0, column=2, sticky=tk.W)
         ttk.Checkbutton(opt_frame, text="完了後にブラウザを閉じない", variable=self.keep_open_var).grid(row=0, column=3, sticky=tk.W, padx=(16, 8))
+        ttk.Checkbutton(opt_frame, text="完了時に可視ブラウザで表示（ヘッドレス向け）", variable=self.show_end_var).grid(row=0, column=4, sticky=tk.W, padx=(16, 8))
+
+        # Login info
+        login_frame = ttk.LabelFrame(frm, text="ログイン情報（任意・コピペ用）")
+        login_frame.pack(fill=tk.X, padx=0, pady=(0, pad))
+        ttk.Label(login_frame, text="ユーザー名:").grid(row=0, column=0, sticky=tk.E, padx=(8, 4), pady=8)
+        self.username_entry = ttk.Entry(login_frame, textvariable=self.username_var, width=32)
+        self.username_entry.grid(row=0, column=1, sticky=tk.W, padx=(0, 4), pady=8)
+        ttk.Button(login_frame, text="コピー", command=self._copy_username).grid(row=0, column=2, sticky=tk.W, padx=(0, 8))
+
+        ttk.Label(login_frame, text="パスワード:").grid(row=1, column=0, sticky=tk.E, padx=(8, 4), pady=(0, 8))
+        self.password_entry = ttk.Entry(login_frame, textvariable=self.password_var, width=32, show="•")
+        self.password_entry.grid(row=1, column=1, sticky=tk.W, padx=(0, 4), pady=(0, 8))
+        ttk.Button(login_frame, text="コピー", command=self._copy_password).grid(row=1, column=2, sticky=tk.W, padx=(0, 8), pady=(0, 8))
+        ttk.Checkbutton(login_frame, text="表示", variable=self.show_password_var, command=self._toggle_password_visibility).grid(row=1, column=3, sticky=tk.W)
 
         # Controls
         ctrl_frame = ttk.Frame(frm)
@@ -196,18 +216,40 @@ class CompleteWorkflowGUI:
         self.running = True
         self.start_btn.configure(state=tk.DISABLED)
         self.status_var.set("実行中...")
-        t = threading.Thread(target=self._run_workflow, args=(csv_path, round_number, headless, timeout, keep_open), daemon=True)
+        # Optional credentials and show-end
+        username = self.username_var.get().strip() or None
+        password = self.password_var.get().strip() or None
+        show_end = bool(self.show_end_var.get())
+
+        t = threading.Thread(
+            target=self._run_workflow,
+            args=(csv_path, round_number, headless, timeout, keep_open, username, password, show_end),
+            daemon=True,
+        )
         self.worker = t
         t.start()
 
-    def _run_workflow(self, csv_path: str, round_number: str | None, headless: bool, timeout: int, keep_open: bool) -> None:
+    def _run_workflow(self, csv_path: str, round_number: str | None, headless: bool, timeout: int, keep_open: bool, username: str | None, password: str | None, show_end: bool) -> None:
         try:
             logging.info("Starting Complete Workflow...")
-            automation = CompleteTotoAutomation(headless=headless, timeout=timeout, keep_browser_open=keep_open)
+            automation = CompleteTotoAutomation(
+                headless=headless,
+                timeout=timeout,
+                keep_browser_open=keep_open,
+                show_end=show_end,
+                username=username,
+                password=password,
+            )
             ok = automation.execute_complete_workflow(csv_path, round_number)
             if ok:
                 logging.info("✅ 完了: すべてのバッチが処理されました。")
-                self.root.after(0, lambda: messagebox.showinfo("完了", "全バッチの処理が完了しました。ブラウザは開いたままです。" if keep_open else "全バッチの処理が完了しました。"))
+                def _done_msg():
+                    if keep_open:
+                        return "全バッチの処理が完了しました。ブラウザは開いたままです。"
+                    if show_end:
+                        return "全バッチの処理が完了しました。完了ページを可視ブラウザで表示しました。"
+                    return "全バッチの処理が完了しました。"
+                self.root.after(0, lambda: messagebox.showinfo("完了", _done_msg()))
             else:
                 logging.error("❌ 失敗: ワークフローに失敗しました。ログを確認してください。")
                 self.root.after(0, lambda: messagebox.showerror("失敗", "ワークフローに失敗しました。ログを確認してください。"))
@@ -215,6 +257,31 @@ class CompleteWorkflowGUI:
             logging.exception(f"Unexpected error: {e}")
         finally:
             self.root.after(0, self._on_finished)
+
+    def _copy_username(self) -> None:
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.username_var.get())
+            self.root.update()
+        except Exception:
+            pass
+
+    def _copy_password(self) -> None:
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.password_var.get())
+            self.root.update()
+        except Exception:
+            pass
+
+    def _toggle_password_visibility(self) -> None:
+        try:
+            if self.show_password_var.get():
+                self.password_entry.configure(show="")
+            else:
+                self.password_entry.configure(show="•")
+        except Exception:
+            pass
 
     def _on_finished(self) -> None:
         self.running = False
