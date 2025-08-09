@@ -11,6 +11,12 @@ Usage examples:
 
   - Headless mode:
       pwsh> python run_complete_workflow.py --csv sample_data.csv --auto-round --headless
+
+  - Headless + 最後に可視ブラウザで表示:
+      pwsh> python run_complete_workflow.py --csv sample_data.csv --auto-round --headless --show-end
+
+  - ログイン情報の指定（自動ログイン）:
+      pwsh> python run_complete_workflow.py --csv sample_data.csv --auto-round --username 00000931526 --password goodguyg
 """
 
 from __future__ import annotations
@@ -58,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
     parser.add_argument("--timeout", type=int, default=15, help="Driver timeout seconds (default: 15)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--show-end", action="store_true", help="After finish, open the final page in a visible browser (restores session)")
+    parser.add_argument("--username", help="Username for site login (optional)")
+    parser.add_argument("--password", help="Password for site login (optional)")
 
     args = parser.parse_args(argv)
 
@@ -78,7 +87,14 @@ def main(argv: list[str] | None = None) -> int:
             logging.info("No round digits found in filename. Will use latest automatically.")
 
     logging.info("Starting Complete Toto Automation (focused runner)...")
-    automation = CompleteTotoAutomation(headless=args.headless, timeout=args.timeout)
+    automation = CompleteTotoAutomation(
+        headless=args.headless,
+        timeout=args.timeout,
+        keep_browser_open=not args.show_end,  # if we plan to show-end, we'll spin up a new visible window
+        show_end=args.show_end,
+        username=args.username,
+        password=args.password,
+    )
     ok = automation.execute_complete_workflow(csv_path, round_number)
 
     if ok:

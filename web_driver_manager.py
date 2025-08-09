@@ -339,6 +339,188 @@ class WebDriverManager:
         except TimeoutException:
             logger.warning("Page load timeout")
             return False
+
+    def try_login_if_present(self, username: str, password: str) -> Optional[bool]:
+        """
+        If a login form is detected on the current page, fill in the credentials and submit.
+
+        Returns:
+            True if login was attempted and submitted,
+            False if detected but failed to submit,
+            None if no login form detected.
+        """
+        try:
+            assert self.driver is not None
+            d = self.driver
+            url = ""
+            try:
+                url = d.current_url or ""
+            except Exception:
+                pass
+
+            # Quick markers for login pages (toto store login URL or password field existence)
+            login_indicators_xpath = [
+                "//input[@type='password']",
+                "//button[contains(normalize-space(),'ログイン')]|//input[@type='submit' and contains(@value,'ログイン')]",
+            ]
+            has_login = False
+            for xp in login_indicators_xpath:
+                try:
+                    elems = d.find_elements(By.XPATH, xp)
+                    if elems:
+                        has_login = True
+                        break
+                except Exception:
+                    continue
+
+            if not has_login and ("PGSPMB00001" not in url and "login" not in url.lower() and "auth" not in url.lower()):
+                return None
+
+            logger.info("🔐 Login form detected or suspected — attempting auto-fill")
+
+            # Dismiss any popups before typing
+            try:
+                self.close_unexpected_popups()
+            except Exception:
+                pass
+
+            # Candidate selectors for username and password fields
+            user_selectors = [
+                "#memberId", "#loginId", "input[name='memberId']", "input[name='loginId']",
+                "input[autocomplete='username']", "input[type='text'][name*='id' i]",
+                "input[type='tel']",  # some sites use tel for numeric IDs
+                "input[type='text']",
+            ]
+            pass_selectors = [
+                "#password", "input[name='password']", "input[type='password']",
+            ]
+
+            user_el = None
+            for sel in user_selectors:
+                try:
+                    if sel.startswith("//"):
+                        cand = d.find_elements(By.XPATH, sel)
+                    else:
+                        cand = d.find_elements(By.CSS_SELECTOR, sel)
+                    user_el = next((e for e in cand if e.is_displayed() and e.is_enabled()), None)
+                    if user_el:
+                        break
+                except Exception:
+                    continue
+
+            pass_el = None
+            for sel in pass_selectors:
+                try:
+                    if sel.startswith("//"):
+                        cand = d.find_elements(By.XPATH, sel)
+                    else:
+                        cand = d.find_elements(By.CSS_SELECTOR, sel)
+                    pass_el = next((e for e in cand if e.is_displayed() and e.is_enabled()), None)
+                    if pass_el:
+                        break
+                except Exception:
+                    continue
+
+            if not pass_el:
+                # As a last resort, any password input
+                try:
+                    cand = d.find_elements(By.CSS_SELECTOR, "input[type='password']")
+                    pass_el = next((e for e in cand if e.is_displayed() and e.is_enabled()), None)
+                except Exception:
+                    pass
+
+            if not pass_el:
+                logger.debug("No password field visible; not a login page")
+                return None
+
+            # If username field is absent but password exists, try the previous text input
+            if not user_el:
+                try:
+                    text_inputs = d.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='tel'], input:not([type])")
+                    # pick the one before password in DOM order if possible
+                    if text_inputs:
+                        user_el = next((e for e in text_inputs if e.is_displayed() and e.is_enabled()), text_inputs[0])
+                except Exception:
+                    pass
+
+            if not user_el:
+                logger.warning("Login page detected but username field not found")
+                return False
+
+            # Fill credentials
+            try:
+                user_el.clear()
+            except Exception:
+                pass
+            try:
+                user_el.send_keys(username)
+            except Exception as e:
+                logger.warning(f"Failed to type username: {e}")
+                return False
+
+            try:
+                pass_el.clear()
+            except Exception:
+                pass
+            try:
+                pass_el.send_keys(password)
+            except Exception as e:
+                logger.warning(f"Failed to type password: {e}")
+                return False
+
+            # Find and click login/submit button
+            submit_xpaths = [
+                "//button[@type='submit']",
+                "//input[@type='submit']",
+                "//button[contains(normalize-space(),'ログイン')]",
+                "//input[@type='submit' and contains(@value,'ログイン')]",
+                "//button[contains(translate(.,'LOGIN','login'),'login')]",
+            ]
+            clicked = False
+            for xp in submit_xpaths:
+                try:
+                    btns = d.find_elements(By.XPATH, xp)
+                    for b in btns:
+                        if b.is_displayed() and b.is_enabled():
+                            b.click()
+                            clicked = True
+                            break
+                    if clicked:
+                        break
+                except Exception:
+                    continue
+
+            if not clicked:
+                # Try pressing Enter inside password field
+                try:
+                    from selenium.webdriver.common.keys import Keys
+                    pass_el.send_keys(Keys.ENTER)
+                    clicked = True
+                except Exception:
+                    pass
+
+            if not clicked:
+                logger.warning("Could not submit login form")
+                return False
+
+            # Wait briefly for navigation or authenticated element
+            try:
+                WebDriverWait(d, 10).until(
+                    lambda drv: (drv.current_url or "") != url or "logout" in (drv.page_source or "").lower()
+                )
+            except Exception:
+                pass
+
+            logger.info("Login submitted")
+            # Clear a stray alert if appears
+            try:
+                self.handle_alert(accept=True)
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.debug(f"try_login_if_present error: {e}")
+            return False
     
     def screenshot(self, filename: Optional[str] = None) -> str:
         """

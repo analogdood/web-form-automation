@@ -20,10 +20,14 @@ logger = logging.getLogger(__name__)
 class CompleteTotoAutomation:
     """Complete end-to-end toto automation workflow"""
     
-    def __init__(self, headless: bool = False, timeout: int = 15, keep_browser_open: bool = True):
+    def __init__(self, headless: bool = False, timeout: int = 15, keep_browser_open: bool = True,
+                 show_end: bool = False, username: Optional[str] = None, password: Optional[str] = None):
         self.headless = headless
         self.timeout = timeout
         self.keep_browser_open = keep_browser_open
+        self.show_end = show_end
+        self.username = username
+        self.password = password
         
         # Components
         self.webdriver_manager = None
@@ -125,6 +129,13 @@ class CompleteTotoAutomation:
             
             # Final summary
             self._log_final_summary()
+
+            # Optionally open the final page in a visible browser with the same session
+            try:
+                if self.show_end:
+                    self._show_end_in_visible_browser()
+            except Exception as _end_err:
+                logger.warning(f"Show-end step failed: {_end_err}")
             return True
             
         except Exception as e:
@@ -211,6 +222,9 @@ class CompleteTotoAutomation:
                     self.webdriver_manager.close_unexpected_popups()
                 except Exception:
                     pass
+
+                # If login page appears, try automatic login when credentials are provided
+                self._maybe_login()
                 
                 # Data: URL fallback after initial navigation
                 try:
@@ -243,6 +257,7 @@ class CompleteTotoAutomation:
                     self.webdriver_manager.close_unexpected_popups()
                 except Exception:
                     pass
+                self._maybe_login()
                 
             else:
                 logger.info("🤖 Using automatic navigation (will select latest round)")
@@ -255,9 +270,11 @@ class CompleteTotoAutomation:
                     self.webdriver_manager.close_unexpected_popups()
                 except Exception:
                     pass
+                self._maybe_login()
             
             # Verify we reached voting page
-            current_url = self.webdriver_manager.driver.current_url
+            drv = getattr(self.webdriver_manager, "driver", None)
+            current_url = getattr(drv, "current_url", "")
             if "vote" in current_url.lower() or "PGSPSL00001MoveSingleVoteSheet" in current_url:
                 logger.info("✅ Successfully reached voting prediction page")
                 self.voting_page_ready = True
@@ -335,67 +352,92 @@ class CompleteTotoAutomation:
         """Process a single batch of betting data with enhanced loop handling"""
         try:
             logger.info(f"🎯 Processing batch {batch_number}/{total_batches} with {len(batch_data)} sets")
+
+            # If redirected to login at any point, try to log in
+            self._maybe_login()
             
-            # For batches after the first, we need to navigate from addition page
-            if batch_number > 1:
-                logger.info("🔄 Navigating from voting addition page to single voting page...")
-                
-                # Step 1: Click the round link on addition page
-                if not self.round_selector.click_round_link_on_addition_page():
-                    logger.error("❌ Failed to click round link on addition page")
-                    return False
-                logger.info("✅ Clicked round link on addition page")
+            # For batches after the first, ensure we're on the single voting page.
+            # Prefer returning via the cart page's "totoの投票を追加する" to guarantee additive behavior.
+        if batch_number > 1:
+                logger.info("🔄 Ensuring we are on the single voting page for next input...")
                 try:
-                    self.webdriver_manager.close_unexpected_popups()
+            drv2 = getattr(self.webdriver_manager, "driver", None)
+            current_url = getattr(drv2, "current_url", "")
                 except Exception:
-                    pass
-                
-                # Step 2: Click single button to go to voting page
-                if not self.round_selector.click_single_button():
-                    logger.error("❌ Failed to click single button")
-                    return False
-                logger.info("✅ Clicked single button - ready for voting")
-                try:
-                    self.webdriver_manager.close_unexpected_popups()
-                except Exception:
-                    pass
+                    current_url = ""
+
+                if "PGSPSL00001MoveSingleVoteSheet" not in current_url:
+                    # Try cart-page guided navigation first (preferred)
+                    try:
+                        if self.form_filler and hasattr(self.form_filler, "_handle_cart_page_navigation") and self.form_filler._handle_cart_page_navigation():
+                            logger.info("✅ Returned to single voting page via cart navigation")
+                        else:
+                            logger.info("ℹ️ Cart navigation did not succeed; falling back to round link → シングル")
+                            # Fallback: existing method (round link then single)
+                            if not (self.round_selector and self.round_selector.click_round_link_on_addition_page()):
+                                logger.error("❌ Failed to click round link on addition page")
+                                return False
+                            if not (self.round_selector and self.round_selector.click_single_button()):
+                                logger.error("❌ Failed to click single button")
+                                return False
+                    except Exception as nav_err:
+                        logger.warning(f"Cart navigation attempt failed: {nav_err}. Falling back to round link → シングル")
+                        if not (self.round_selector and self.round_selector.click_round_link_on_addition_page()):
+                            logger.error("❌ Failed to click round link on addition page")
+                            return False
+                        if not (self.round_selector and self.round_selector.click_single_button()):
+                            logger.error("❌ Failed to click single button")
+                            return False
+                if self.webdriver_manager:
+                    try:
+                        self.webdriver_manager.close_unexpected_popups()
+                    except Exception:
+                        pass
             
             # Fill form with batch data
             logger.info("📝 Filling voting form...")
-            if not self.form_filler.fill_voting_form(batch_data):
+            if not (self.form_filler and self.form_filler.fill_voting_form(batch_data)):
                 logger.error("❌ Failed to fill voting form")
                 return False
             
             logger.info("✅ Form filled successfully")
-            try:
-                self.webdriver_manager.close_unexpected_popups()
-            except Exception:
-                pass
+            if self.webdriver_manager:
+                try:
+                    self.webdriver_manager.close_unexpected_popups()
+                except Exception:
+                    pass
             
             # Submit form (add to cart)
             logger.info("🛒 Submitting form (adding to cart)...")
-            if not self.form_filler.submit_form():
+            if not (self.form_filler and self.form_filler.submit_form()):
                 logger.error("❌ Failed to submit form")
                 return False
             
             logger.info("✅ Form submitted successfully")
-            try:
-                self.webdriver_manager.close_unexpected_popups()
-            except Exception:
-                pass
+            if self.webdriver_manager:
+                try:
+                    self.webdriver_manager.close_unexpected_popups()
+                except Exception:
+                    pass
             
             # Handle any alerts
-            try:
-                logger.info("🔔 Handling any alerts...")
-                self.webdriver_manager.handle_alert(accept=True)
-            except Exception as alert_error:
-                logger.debug(f"No alerts to handle: {alert_error}")
+            if self.webdriver_manager:
+                try:
+                    logger.info("🔔 Handling any alerts...")
+                    self.webdriver_manager.handle_alert(accept=True)
+                except Exception as alert_error:
+                    logger.debug(f"No alerts to handle: {alert_error}")
             
-            # For the last batch, no need to navigate back
-            if batch_number == total_batches:
-                logger.info("🏁 Last batch completed - no navigation needed")
+            # If more batches remain, proactively return via cart page to ensure additive behavior
+            if batch_number < total_batches:
+                logger.info("🔄 Preparing for next batch: returning via cart page's 'totoの投票を追加する'...")
+                try:
+                    if not (self.form_filler and hasattr(self.form_filler, "_handle_cart_page_navigation") and self.form_filler._handle_cart_page_navigation()):
+                        logger.warning("Could not return via cart navigation now; next loop will attempt recovery")
+                except Exception as post_nav_err:
+                    logger.debug(f"Post-submit cart navigation error: {post_nav_err}")
             else:
-                logger.info("🔄 Preparing for next batch (will handle navigation in next iteration)...")
+                logger.info("🏁 Last batch completed - staying on current page")
             
             return True
             
@@ -451,6 +493,78 @@ class CompleteTotoAutomation:
     def get_automation_stats(self) -> Dict:
         """Get current automation statistics"""
         return self.stats.copy()
+
+    def _maybe_login(self) -> None:
+        """Attempt automatic login if we're on a login page and credentials are provided."""
+        try:
+            if not self.username or not self.password:
+                return
+            if not self.webdriver_manager or not getattr(self.webdriver_manager, "driver", None):
+                return
+            ok = self.webdriver_manager.try_login_if_present(self.username, self.password)
+            if ok is True:
+                logger.info("🔐 Auto-login completed")
+            elif ok is False:
+                logger.warning("🔐 Auto-login attempted but may have failed")
+            else:
+                logger.debug("No login page detected; skipping auto-login")
+        except Exception as e:
+            logger.debug(f"Auto-login check failed: {e}")
+
+    def _show_end_in_visible_browser(self) -> None:
+        """Open the final page in a new visible browser and transfer session cookies."""
+        try:
+            if not self.webdriver_manager or not getattr(self.webdriver_manager, "driver", None):
+                logger.warning("No active driver to transfer session from")
+                return
+            driver = self.webdriver_manager.driver
+            current_url = driver.current_url
+            try:
+                cookies = driver.get_cookies()
+            except Exception as e:
+                logger.warning(f"Could not read cookies from headless session: {e}")
+                cookies = []
+
+            # Start a visible browser
+            from urllib.parse import urlparse
+            visible = WebDriverManager(headless=False, timeout=self.timeout)
+            if not visible.setup_driver():
+                logger.error("Could not start visible browser for show-end")
+                return
+            vdrv = visible.driver
+            assert vdrv is not None
+
+            # Navigate to base to set cookies
+            parsed = urlparse(current_url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            vdrv.get(base)
+
+            # Import cookies (filter incompatible keys)
+            imported = 0
+            for c in cookies:
+                try:
+                    cd = {k: v for k, v in c.items() if k in ("name","value","domain","path","secure","expiry","httpOnly")}
+                    # Domain must match or be parent; Selenium may adjust automatically
+                    vdrv.add_cookie(cd)
+                    imported += 1
+                except Exception:
+                    continue
+            logger.info(f"Imported {imported} cookies into visible browser")
+
+            # Go to final url
+            vdrv.get(current_url)
+            logger.info("✅ Final page opened in visible browser")
+
+            # Optionally try auto-login again if redirected to login and creds available
+            if self.username and self.password:
+                try:
+                    visible.try_login_if_present(self.username, self.password)
+                except Exception:
+                    pass
+
+            # Keep visible browser open; do not close here
+        except Exception as e:
+            logger.warning(f"Show-end failed: {e}")
 
 def main():
     """Main function for testing the complete workflow"""
