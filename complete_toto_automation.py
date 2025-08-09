@@ -358,11 +358,11 @@ class CompleteTotoAutomation:
             
             # For batches after the first, ensure we're on the single voting page.
             # Prefer returning via the cart page's "totoの投票を追加する" to guarantee additive behavior.
-        if batch_number > 1:
+            if batch_number > 1:
                 logger.info("🔄 Ensuring we are on the single voting page for next input...")
                 try:
-            drv2 = getattr(self.webdriver_manager, "driver", None)
-            current_url = getattr(drv2, "current_url", "")
+                    drv2 = getattr(self.webdriver_manager, "driver", None)
+                    current_url = getattr(drv2, "current_url", "")
                 except Exception:
                     current_url = ""
 
