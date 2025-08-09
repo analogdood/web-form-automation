@@ -37,7 +37,12 @@ class TotoRoundSelector:
         try:
             logger.info(f"Navigating to start page: {start_url}")
             self.driver.get(start_url)
-            time.sleep(3)  # Wait for page to load
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+                )
+            except Exception:
+                pass
             
             current_url = self.driver.current_url
             logger.info(f"Current URL after navigation: {current_url}")
@@ -218,7 +223,12 @@ class TotoRoundSelector:
                 return False
                 
             logger.info("✅ Round link clicked, waiting for navigation...")
-            time.sleep(4)  # Wait longer for navigation
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    lambda d: d.current_url != current_url
+                )
+            except Exception:
+                pass
             
             # Store selection for session memory
             self.selected_round = round_info['text']
@@ -272,9 +282,9 @@ class TotoRoundSelector:
         """
         if self.selected_round:
             return {
-                'round_text': self.selected_round,
-                'round_number': self.selected_round_id,
-                'round_url': self.selected_round_url
+                'round_text': self.selected_round or "",
+                'round_number': self.selected_round_id or "",
+                'round_url': self.selected_round_url or "",
             }
         return None
     
@@ -330,14 +340,35 @@ class TotoRoundSelector:
                             logger.info(f"Button info: {button_info}")
                             
                             # Click the button
+                            current_url = self.driver.current_url
                             element.click()
                             logger.info("🚀 Clicked '今すぐ投票予想する' button successfully!")
-                            time.sleep(3)  # Wait for page transition
-                            
-                            # Verify navigation
+
+                            # Wait until either URL changes or 'シングル'ボタンがクリック可能
+                            try:
+                                WebDriverWait(self.driver, 10).until(
+                                    lambda d: d.current_url != current_url
+                                )
+                            except Exception:
+                                pass
+
+                            # Verify navigation quickly
+                            try:
+                                WebDriverWait(self.driver, 10).until(
+                                    EC.element_to_be_clickable((By.ID, "select_single"))
+                                )
+                            except Exception:
+                                # Fallback alternative locators
+                                try:
+                                    WebDriverWait(self.driver, 8).until(
+                                        EC.element_to_be_clickable((By.XPATH, "//img[@alt='シングル']"))
+                                    )
+                                except Exception:
+                                    pass
+
                             new_url = self.driver.current_url
                             logger.info(f"Navigated to: {new_url}")
-                            
+
                             # Now automatically click the シングル button since we always buy single
                             logger.info("🎯 Automatically clicking 'シングル' button (we always buy single)...")
                             if self.click_single_button():
@@ -375,9 +406,14 @@ class TotoRoundSelector:
             round_number = self.selected_round_id
             logger.info(f"🎯 Looking for round link '第{round_number}回' on voting addition page...")
             
-            # Wait longer for voting addition page to fully load
-            time.sleep(5)
-            logger.info("⏳ Waiting for voting addition page to load completely...")
+            # Wait for voting addition page to be ready
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+                )
+            except Exception:
+                pass
+            logger.info("⏳ Voting addition page ready check completed")
             
             # Get current page info for debugging
             current_url = self.driver.current_url
@@ -403,9 +439,16 @@ class TotoRoundSelector:
                     for element in elements:
                         if element.is_displayed() and element.is_enabled():
                             logger.info(f"✅ Found 'totoの投票を追加する' button with selector: {selector}")
+                            current_url_before = self.driver.current_url
                             element.click()
                             logger.info("🚀 Clicked 'totoの投票を追加する' button successfully!")
-                            time.sleep(3)  # Wait for page transition
+                            # Wait for navigation or DOM readiness
+                            try:
+                                WebDriverWait(self.driver, 10).until(
+                                    lambda d: d.current_url != current_url_before or d.execute_script("return document.readyState") in ("interactive", "complete")
+                                )
+                            except Exception:
+                                pass
                             toto_add_clicked = True
                             break
                     if toto_add_clicked:
@@ -417,8 +460,13 @@ class TotoRoundSelector:
             if not toto_add_clicked:
                 logger.info("ℹ️ 'totoの投票を追加する' button not found or not needed")
             
-            # Wait a bit more after clicking toto add button
-            time.sleep(2)
+            # Ensure page is ready after click
+            try:
+                WebDriverWait(self.driver, 8).until(
+                    lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+                )
+            except Exception:
+                pass
             
             # First, let's find ALL links with round numbers to debug
             logger.info("🔍 Debug: Finding all round-related links on page...")
@@ -476,10 +524,16 @@ class TotoRoundSelector:
                 if f'第{round_number}回' in link['text'] and round_number in link['onclick']:
                     logger.info(f"✅ Found exact match round link: '{link['text']}'")
                     try:
+                        current_url_before = self.driver.current_url
                         link['element'].click()
                         logger.info(f"🚀 Clicked round link '第{round_number}回' successfully!")
-                        time.sleep(3)  # Wait for page transition
-                        
+                        # Wait for URL change
+                        try:
+                            WebDriverWait(self.driver, 10).until(
+                                lambda d: d.current_url != current_url_before
+                            )
+                        except Exception:
+                            pass
                         # Verify navigation
                         new_url = self.driver.current_url
                         logger.info(f"Navigated to: {new_url}")
@@ -507,14 +561,19 @@ class TotoRoundSelector:
                             logger.info(f"Link info: {link_info}")
                             
                             # Click the link
+                            current_url_before = self.driver.current_url
                             element.click()
                             logger.info(f"🚀 Clicked round link '第{round_number}回' successfully!")
-                            time.sleep(3)  # Wait for page transition
-                            
+                            # Wait for URL change
+                            try:
+                                WebDriverWait(self.driver, 10).until(
+                                    lambda d: d.current_url != current_url_before
+                                )
+                            except Exception:
+                                pass
                             # Verify navigation
                             new_url = self.driver.current_url
                             logger.info(f"Navigated to: {new_url}")
-                            
                             return True
                                 
                 except Exception as e:
@@ -584,14 +643,19 @@ class TotoRoundSelector:
                             logger.info(f"Button info: {button_info}")
                             
                             # Click the button
+                            current_url_before = self.driver.current_url
                             element.click()
                             logger.info("🚀 Clicked 'シングル' button successfully!")
-                            time.sleep(4)  # Wait longer for page transition to single voting page
-                            
+                            # Wait for URL to change or sheet elements to appear
+                            try:
+                                WebDriverWait(self.driver, 12).until(
+                                    lambda d: d.current_url != current_url_before
+                                )
+                            except Exception:
+                                pass
                             # Verify navigation to single voting page
                             new_url = self.driver.current_url
                             logger.info(f"Navigated to: {new_url}")
-                            
                             # Check if we're on the single voting page
                             if 'PGSPSL00001MoveSingleVoteSheet' in new_url or 'single' in new_url.lower():
                                 logger.info("✅ Successfully navigated to single voting page")

@@ -73,3 +73,32 @@ edgedriver
 # Data files (except sample)
 *.csv
 !sample_data.csv
+
+# Environment & secrets
+.env
+.env.*
+.python-version
+
+# Type checkers / linters caches
+.mypy_cache/
+.ruff_cache/
+.pylint.d/
+.pytype/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generic caches
+.cache/
+
+# Temp files
+*.tmp
+*.temp
+*.bak
+*.orig
+
+# Local artifacts (safe to ignore if generated)
+drivers/
+selenium-driver/
+artifacts/
+reports/

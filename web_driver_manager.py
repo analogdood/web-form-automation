@@ -8,29 +8,38 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
-    TimeoutException, 
-    NoSuchElementException, 
+    TimeoutException,
+    NoSuchElementException,
     WebDriverException,
-    ElementNotInteractableException
+    ElementNotInteractableException,
 )
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.firefox.service import Service as FirefoxService
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.service import Service as EdgeService
+from selenium.webdriver.remote.webdriver import WebDriver as RemoteWebDriver
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
 from config import Config
 import time
 from typing import Optional, List, Union
+from selenium.webdriver.remote.webelement import WebElement
 
 logger = logging.getLogger(__name__)
 
 class WebDriverManager:
     """Manages WebDriver lifecycle and common operations"""
     
-    def __init__(self, browser: str = None, headless: bool = None, timeout: int = None):
+    def __init__(self, browser: Optional[str] = None, headless: Optional[bool] = None, timeout: Optional[int] = None):
         self.browser = browser or Config.BROWSER
         self.headless = headless if headless is not None else Config.HEADLESS_MODE
         self.timeout = timeout or Config.WEBDRIVER_TIMEOUT
         
-        self.driver: Optional[webdriver.Chrome] = None
+        # Use generic RemoteWebDriver for cross-browser typing
+        self.driver: Optional[RemoteWebDriver] = None
         self.wait: Optional[WebDriverWait] = None
         
     def setup_driver(self) -> bool:
@@ -54,6 +63,7 @@ class WebDriverManager:
                 return False
             
             # Configure timeouts
+            assert self.driver is not None
             self.driver.implicitly_wait(Config.IMPLICIT_WAIT)
             self.driver.set_page_load_timeout(Config.PAGE_LOAD_TIMEOUT)
             
@@ -73,39 +83,49 @@ class WebDriverManager:
     def _setup_chrome_driver(self):
         """Setup Chrome WebDriver"""
         options = Config.get_chrome_options()
+        try:
+            # Speed up by not waiting for all subresources
+            options.page_load_strategy = "eager"  # type: ignore[attr-defined]
+        except Exception:
+            pass
         if self.headless:
             options.add_argument("--headless")
-        
-        service = webdriver.chrome.service.Service(ChromeDriverManager().install())
+        service = ChromeService(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=options)
     
     def _setup_firefox_driver(self):
         """Setup Firefox WebDriver"""
         options = Config.get_firefox_options()
+        try:
+            options.page_load_strategy = "eager"  # type: ignore[attr-defined]
+        except Exception:
+            pass
         if self.headless:
             options.add_argument("--headless")
-        
-        service = webdriver.firefox.service.Service(GeckoDriverManager().install())
+        service = FirefoxService(GeckoDriverManager().install())
         self.driver = webdriver.Firefox(service=service, options=options)
     
     def _setup_edge_driver(self):
         """Setup Edge WebDriver"""
-        options = webdriver.edge.options.Options()
+        options = EdgeOptions()
+        try:
+            options.page_load_strategy = "eager"  # type: ignore[attr-defined]
+        except Exception:
+            pass
         if self.headless:
             options.add_argument("--headless")
             options.add_argument("--disable-gpu")
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
-        
         try:
             # Try to download EdgeDriver
-            service = webdriver.edge.service.Service(EdgeChromiumDriverManager().install())
+            service = EdgeService(EdgeChromiumDriverManager().install())
         except Exception as e:
             logger.warning(f"Failed to auto-download EdgeDriver: {e}")
             logger.info("Attempting to use system EdgeDriver...")
             # Try to use system-installed EdgeDriver
             try:
-                service = webdriver.edge.service.Service()
+                service = EdgeService()
                 self.driver = webdriver.Edge(service=service, options=options)
                 return
             except Exception as system_err:
@@ -116,8 +136,9 @@ class WebDriverManager:
                     self._setup_chrome_driver()
                     return
                 except Exception as chrome_err:
-                    raise Exception(f"All WebDriver options failed. Edge auto-download: {e}, Edge system: {system_err}, Chrome fallback: {chrome_err}")
-        
+                    raise Exception(
+                        f"All WebDriver options failed. Edge auto-download: {e}, Edge system: {system_err}, Chrome fallback: {chrome_err}"
+                    )
         self.driver = webdriver.Edge(service=service, options=options)
     
     def navigate_to_url(self, url: str) -> bool:
@@ -132,6 +153,7 @@ class WebDriverManager:
         """
         try:
             logger.info(f"Navigating to: {url}")
+            assert self.driver is not None and self.wait is not None
             self.driver.get(url)
             
             # Wait for page to load
@@ -149,7 +171,7 @@ class WebDriverManager:
             logger.error(f"Navigation failed: {e}")
             return False
     
-    def find_element_safe(self, selectors: List[str], element_name: str = "element") -> Optional[object]:
+    def find_element_safe(self, selectors: List[str], element_name: str = "element") -> Optional[WebElement]:
         """
         Find element using multiple selector strategies
         
@@ -160,6 +182,7 @@ class WebDriverManager:
         Returns:
             WebElement if found, None otherwise
         """
+        assert self.wait is not None and self.driver is not None
         for selector in selectors:
             try:
                 # Handle different selector types
@@ -212,6 +235,7 @@ class WebDriverManager:
         
         try:
             # Wait for element to be clickable
+            assert self.wait is not None and self.driver is not None
             clickable_element = self.wait.until(EC.element_to_be_clickable(element))
             clickable_element.click()
             logger.info(f"Successfully clicked {element_name}")
@@ -220,6 +244,7 @@ class WebDriverManager:
         except ElementNotInteractableException:
             logger.warning(f"{element_name} not interactable, trying JavaScript click")
             try:
+                assert self.driver is not None
                 self.driver.execute_script("arguments[0].click();", element)
                 logger.info(f"Successfully clicked {element_name} using JavaScript")
                 return True
@@ -242,6 +267,7 @@ class WebDriverManager:
             bool: True if alert was handled, False if no alert
         """
         try:
+            assert self.driver is not None
             WebDriverWait(self.driver, 5).until(EC.alert_is_present())
             alert = self.driver.switch_to.alert
             
@@ -275,6 +301,7 @@ class WebDriverManager:
             bool: True if page loaded, False if timeout
         """
         try:
+            assert self.driver is not None
             wait_time = timeout or self.timeout
             WebDriverWait(self.driver, wait_time).until(
                 lambda driver: driver.execute_script("return document.readyState") == "complete"
@@ -286,7 +313,7 @@ class WebDriverManager:
             logger.warning("Page load timeout")
             return False
     
-    def screenshot(self, filename: str = None) -> str:
+    def screenshot(self, filename: Optional[str] = None) -> str:
         """
         Take a screenshot
         
@@ -301,6 +328,7 @@ class WebDriverManager:
             filename = f"screenshot_{timestamp}.png"
         
         try:
+            assert self.driver is not None
             self.driver.save_screenshot(filename)
             logger.info(f"Screenshot saved: {filename}")
             return filename
