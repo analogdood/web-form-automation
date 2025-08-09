@@ -6,9 +6,9 @@ import os
 
 class Config:
     # WebDriver settings
-    WEBDRIVER_TIMEOUT = 10
+    WEBDRIVER_TIMEOUT = 20
     IMPLICIT_WAIT = 5
-    PAGE_LOAD_TIMEOUT = 30
+    PAGE_LOAD_TIMEOUT = 60
     HEADLESS_MODE = False
     
     # Browser settings

@@ -116,9 +116,11 @@ class WebDriverManager:
             pass
         if self.headless:
             options.add_argument("--headless")
-            options.add_argument("--disable-gpu")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
+        # Stability flags (safe to apply even non-headless)
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
         try:
             # Try to download EdgeDriver
             service = EdgeService(EdgeChromiumDriverManager().install())
@@ -156,21 +158,44 @@ class WebDriverManager:
         try:
             logger.info(f"Navigating to: {url}")
             assert self.driver is not None and self.wait is not None
-            self.driver.get(url)
-            
-            # Wait for page to load
-            self.wait.until(
-                lambda driver: driver.execute_script("return document.readyState") == "complete"
-            )
-            
-            logger.info("Page loaded successfully")
-            return True
-            
-        except TimeoutException:
-            logger.error("Page load timeout")
+
+            attempts = 0
+            max_attempts = 3
+            last_err: Optional[Exception] = None
+            while attempts < max_attempts:
+                attempts += 1
+                try:
+                    self.driver.get(url)
+                    # Wait for page to load sufficiently
+                    self.wait.until(
+                        lambda driver: driver.execute_script("return document.readyState") in ("interactive", "complete")
+                    )
+
+                    current = self.driver.current_url or ""
+                    if current.startswith("data:"):
+                        logger.warning(f"Still at blank page (data:). Attempt {attempts}/{max_attempts} will retry...")
+                        time.sleep(1)
+                        continue
+
+                    logger.info("Page loaded successfully")
+                    return True
+                except TimeoutException as e:
+                    last_err = e
+                    logger.warning(f"Page load timeout (attempt {attempts}/{max_attempts}). Retrying...")
+                    continue
+                except WebDriverException as e:
+                    last_err = e
+                    logger.warning(f"Navigation error (attempt {attempts}/{max_attempts}): {e}")
+                    time.sleep(1)
+                    continue
+
+            if last_err:
+                logger.error(f"Navigation failed after {max_attempts} attempts: {last_err}")
+            else:
+                logger.error(f"Navigation failed after {max_attempts} attempts for unknown reasons")
             return False
-        except WebDriverException as e:
-            logger.error(f"Navigation failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error during navigation: {e}")
             return False
     
     def find_element_safe(self, selectors: List[str], element_name: str = "element") -> Optional[WebElement]:

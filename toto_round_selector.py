@@ -12,6 +12,7 @@ from typing import List, Dict, Optional, Tuple
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,8 @@ class TotoRoundSelector:
         self.selected_round = None
         self.selected_round_id = None
         self.selected_round_url = None
+
+    # navigate_to_voting_prediction is implemented later in the file with the complete flow
     
     def navigate_to_start_page(self, start_url: str) -> bool:
         """
@@ -36,18 +39,38 @@ class TotoRoundSelector:
         """
         try:
             logger.info(f"Navigating to start page: {start_url}")
-            self.driver.get(start_url)
-            try:
-                WebDriverWait(self.driver, 10).until(
-                    lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
-                )
-            except Exception:
-                pass
-            
-            current_url = self.driver.current_url
-            logger.info(f"Current URL after navigation: {current_url}")
-            return True
-            
+            attempts = 0
+            max_attempts = 3
+            timeout = getattr(Config, "WEBDRIVER_TIMEOUT", 10)
+            last_err: Optional[Exception] = None
+            while attempts < max_attempts:
+                attempts += 1
+                try:
+                    self.driver.get(start_url)
+                    try:
+                        WebDriverWait(self.driver, timeout).until(
+                            lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+                        )
+                    except Exception:
+                        pass
+
+                    current_url = self.driver.current_url or ""
+                    logger.info(f"Current URL after navigation: {current_url}")
+                    if current_url.startswith("data:"):
+                        logger.warning(f"Still at blank data: URL after attempt {attempts}/{max_attempts}. Retrying...")
+                        time.sleep(1)
+                        continue
+                    return True
+                except Exception as e:
+                    last_err = e
+                    logger.warning(f"Start page navigation error (attempt {attempts}/{max_attempts}): {e}")
+                    time.sleep(1)
+                    continue
+            if last_err:
+                logger.error(f"Failed to navigate to start page after {max_attempts} attempts: {last_err}")
+            else:
+                logger.error(f"Failed to navigate to start page after {max_attempts} attempts")
+            return False
         except Exception as e:
             logger.error(f"Failed to navigate to start page: {e}")
             return False
