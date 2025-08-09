@@ -383,21 +383,19 @@ class WebDriverManager:
         Returns: number of popups likely handled
         """
         handled = 0
+        start = time.time()
+        budget_sec = 2.5  # keep this quick to avoid blocking main flow
+        driver = self.driver
+        assert driver is not None
+
+        # 1) Alerts: quick check
         try:
-            # Alerts first
             if self.handle_alert(accept=True):
                 handled += 1
         except Exception:
             pass
 
-        driver = self.driver
-        wait = self.wait
-        assert driver is not None
-        assert wait is not None
-
-        # Candidate selectors (CSS or XPath)
         selectors: List[str] = [
-            # CSS close buttons
             "[aria-label='close']",
             "[aria-label='Close']",
             "[data-testid*='close']",
@@ -409,59 +407,69 @@ class WebDriverManager:
             ".popup .close",
             ".overlay .close",
             ".dialog .close",
-            # XPath text-based
             "//button[contains(normalize-space(),'閉じる')]",
             "//a[contains(normalize-space(),'閉じる')]",
             "//*[text()='×' or text()='✕']",
         ]
 
-        def try_close_in_context() -> int:
+        def try_close_in_context_quick() -> int:
             c = 0
             for sel in selectors:
+                if time.time() - start > budget_sec:
+                    break
                 try:
                     if sel.startswith("//"):
-                        elem = wait.until(EC.element_to_be_clickable((By.XPATH, sel)))
+                        elems = driver.find_elements(By.XPATH, sel)
                     else:
-                        elem = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
-                    elem.click()
-                    logger.info(f"Closed a popup using selector: {sel}")
-                    c += 1
+                        elems = driver.find_elements(By.CSS_SELECTOR, sel)
+                    for e in elems:
+                        if time.time() - start > budget_sec:
+                            break
+                        try:
+                            if e.is_displayed() and e.is_enabled():
+                                e.click()
+                                c += 1
+                        except Exception:
+                            continue
                 except Exception:
                     continue
-            # Try ESC as generic dismiss
+            # ESC as a generic dismiss (non-blocking)
             try:
                 ActionChains(driver).send_keys(Keys.ESCAPE).perform()
             except Exception:
                 pass
             return c
 
-        # Default content
+        # Default content quick scan
         try:
-            handled += try_close_in_context()
+            handled += try_close_in_context_quick()
         except Exception:
             pass
 
-        # Look into iframes
+        # Limited iframe scan (quick)
         try:
-            iframes = driver.find_elements(By.CSS_SELECTOR, "iframe")
-            for i, frame in enumerate(iframes[:max_iframes]):
-                try:
-                    driver.switch_to.frame(frame)
-                    handled += try_close_in_context()
-                except Exception:
-                    continue
-                finally:
+            if time.time() - start < budget_sec:
+                frames = driver.find_elements(By.CSS_SELECTOR, "iframe")[:max_iframes]
+                for frame in frames:
+                    if time.time() - start > budget_sec:
+                        break
                     try:
-                        driver.switch_to.default_content()
+                        driver.switch_to.frame(frame)
+                        handled += try_close_in_context_quick()
                     except Exception:
-                        pass
+                        continue
+                    finally:
+                        try:
+                            driver.switch_to.default_content()
+                        except Exception:
+                            pass
         except Exception:
             pass
 
         if handled:
-            logger.info(f"Unexpected popups handled: {handled}")
+            logger.info(f"Unexpected popups handled quickly: {handled}")
         else:
-            logger.debug("No unexpected popups found")
+            logger.debug("No unexpected popups found (quick scan)")
         return handled
     
     def __enter__(self):

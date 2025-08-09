@@ -170,12 +170,15 @@ class CompleteTotoAutomation:
         """Navigate to toto site and select round"""
         try:
             logger.info("🧭 Starting navigation and round selection...")
-            # Proactively close unexpected popups
+            # Proactively close unexpected popups (quick scan) and log elapsed
             if self.webdriver_manager:
                 try:
-                    self.webdriver_manager.close_unexpected_popups()
-                except Exception:
-                    pass
+                    t0 = time.time()
+                    closed = self.webdriver_manager.close_unexpected_popups()
+                    dt = (time.time() - t0)
+                    logger.debug(f"Popup quick-scan closed={closed}, elapsed={dt:.2f}s")
+                except Exception as _e:
+                    logger.debug(f"Popup quick-scan skipped: {_e}")
 
             # Ensure components are initialized (helps static analyzers and avoids None access)
             assert self.round_selector is not None, "Round selector not initialized"
@@ -195,6 +198,18 @@ class CompleteTotoAutomation:
                     self.webdriver_manager.close_unexpected_popups()
                 except Exception:
                     pass
+                
+                # Data: URL fallback after initial navigation
+                try:
+                    cur_url = getattr(getattr(self.webdriver_manager, 'driver', None), 'current_url', '')
+                    logger.debug(f"Current URL after start page nav: {cur_url}")
+                    if str(cur_url).startswith("data:"):
+                        logger.info("Still at data:, retry navigating to START_URL...")
+                        if not self.round_selector.navigate_to_start_page(Config.START_URL):
+                            logger.error("Failed to leave data: URL state")
+                            return False
+                except Exception as _uerr:
+                    logger.debug(f"Could not read current URL: {_uerr}")
                 
                 # Step 2: Detect rounds
                 rounds = self.round_selector.detect_toto_rounds()
