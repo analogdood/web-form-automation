@@ -26,12 +26,7 @@ if str(BASE_DIR) not in sys.path:
 
 from complete_toto_automation import CompleteTotoAutomation
 
-# Load environment variables from .env if available (for default credentials)
-try:
-    from dotenv import load_dotenv  # type: ignore
-    load_dotenv()
-except Exception:
-    pass
+# No environment variables needed - using direct values for copy-paste convenience
 
 
 class TkTextHandler(logging.Handler):
@@ -89,13 +84,9 @@ class CompleteWorkflowGUI:
         self.password_var = tk.StringVar()
         self.show_end_var = tk.BooleanVar(value=False)
 
-        # Prefill from environment if present (so user can copy immediately)
-        uname = os.getenv("TOTO_USERNAME") or os.getenv("TOTO_USER") or ""
-        pword = os.getenv("TOTO_PASSWORD") or os.getenv("TOTO_PASS") or ""
-        if uname:
-            self.username_var.set(uname)
-        if pword:
-            self.password_var.set(pword)
+        # Set login credentials for easy copy-paste (edit these lines directly)
+        self.username_var.set("00000931526")  # ← ここを編集
+        self.password_var.set("goodguyg")  # ← ここを編集
 
         self._build_ui()
         self._configure_logging()
