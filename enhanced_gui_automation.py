@@ -1700,7 +1700,7 @@ class EnhancedAutomationGUI:
             'ready': '待機中'
         }
         
-    message = stage_messages.get(stage, str(stage)) or str(stage)
+        message = stage_messages.get(stage, str(stage)) or str(stage)
         self.workflow_progress.config(text=message)
         
         if progress_percent is not None:
