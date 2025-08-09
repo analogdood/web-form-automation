@@ -8,7 +8,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     TimeoutException, 
     NoSuchElementException,
-    ElementNotInteractableException
+    ElementNotInteractableException,
+    ElementClickInterceptedException,
 )
 from typing import List, Dict, Optional
 from config import Config
@@ -293,6 +294,14 @@ class FormFiller:
         try:
             logger.info("Attempting to submit form (add to cart)")
             
+            # Pre-clean: quickly dismiss popups/overlays that may block the cart button
+            try:
+                handled = self._dismiss_popups_and_overlays_quick()
+                if handled:
+                    logger.info(f"Pre-clean dismissed {handled} popup/overlay elements")
+            except Exception as e:
+                logger.debug(f"Pre-clean failed: {e}")
+
             # Enhanced scrolling to ensure cart button is visible
             try:
                 logger.info("🔄 Enhanced scrolling to find cart button...")
@@ -381,6 +390,14 @@ class FormFiller:
                     pass
             
             logger.info(f"🔍 Found {len(unique_clickables)} clickable elements, filtering for cart buttons...")
+
+            # Extra pre-check: run one more quick popup/overlay dismissal before analyzing buttons
+            try:
+                handled2 = self._dismiss_popups_and_overlays_quick()
+                if handled2:
+                    logger.info(f"Pre-click cleanup dismissed {handled2} popup/overlay elements")
+            except Exception as e:
+                logger.debug(f"Pre-click cleanup failed: {e}")
             
             cart_button_candidates = []
             # Only analyze a reasonable number of elements to reduce log spam
@@ -508,6 +525,11 @@ class FormFiller:
             
             # Fallback to regular submit button
             logger.info("Cart button not found, trying regular submit button")
+            # Clean one more time before trying submit
+            try:
+                self._dismiss_popups_and_overlays_quick()
+            except Exception:
+                pass
             success = self.driver_manager.click_element_safe(
                 Config.SELECTORS['submit_button'], 
                 "submit button"
@@ -526,6 +548,52 @@ class FormFiller:
         except Exception as e:
             logger.error(f"Error submitting form: {e}")
             return False
+
+    def _dismiss_popups_and_overlays_quick(self) -> int:
+        """Quickly dismiss common popups and hide overlays that may block clicks.
+
+        Returns:
+            int: Approximate number of elements handled/hidden.
+        """
+        handled = 0
+        try:
+            # Use driver manager quick popup closer (alerts, close buttons, limited iframes)
+            handled += self.driver_manager.close_unexpected_popups(max_iframes=3)
+        except Exception:
+            pass
+
+        # Hide overlay/modals with JS (non-destructive styling overrides)
+        try:
+            js = """
+            (function(){
+                var selectors = [
+                    '.modal-backdrop', '.modal', '.popup', '.overlay',
+                    '[aria-modal="true"]', '[role="dialog"]',
+                    '[class*="modal"]', '[class*="popup"]', '[class*="overlay"]'
+                ];
+                var count = 0;
+                var nodes = document.querySelectorAll(selectors.join(','));
+                for (var i=0;i<nodes.length;i++){
+                    var el = nodes[i];
+                    try{
+                        el.style.setProperty('display','none','important');
+                        el.style.setProperty('visibility','hidden','important');
+                        el.style.setProperty('pointer-events','none','important');
+                        el.style.setProperty('opacity','0','important');
+                        count++;
+                    }catch(e){}
+                }
+                try{ document.body.style.setProperty('overflow','auto','important'); }catch(e){}
+                return count;
+            })();
+            """
+            hidden = self.driver.execute_script(js)
+            if hidden:
+                handled += int(hidden) if isinstance(hidden, (int, float)) else 0
+        except Exception:
+            pass
+
+        return handled
     
     def _handle_confirmation_dialog(self) -> bool:
         """
@@ -1013,13 +1081,36 @@ class FormFiller:
             bool: True if cart button clicked successfully, False otherwise
         """
         try:
+            # Quick cleanup before attempts
+            try:
+                self._dismiss_popups_and_overlays_quick()
+            except Exception:
+                pass
+
             # Method 1: Try direct candidates from analysis
             logger.info("🎯 Method 1: Trying direct cart button candidates...")
             for i, (index, btn, text) in enumerate(cart_button_candidates):
                 try:
                     if btn.is_displayed() and btn.is_enabled():
                         logger.info(f"Attempting to click candidate {i}: '{text}'")
-                        btn.click()
+                        # Ensure in view and unobscured
+                        try:
+                            self.driver.execute_script("arguments[0].scrollIntoView({behavior:'instant',block:'center'});", btn)
+                        except Exception:
+                            pass
+                        # One more cleanup right before click
+                        try:
+                            self._dismiss_popups_and_overlays_quick()
+                        except Exception:
+                            pass
+                        try:
+                            # Prefer waiting for clickable to avoid intercepted clicks
+                            if self.wait:
+                                self.wait.until(EC.element_to_be_clickable(btn))
+                            btn.click()
+                        except (ElementClickInterceptedException, ElementNotInteractableException) as ce:
+                            logger.debug(f"Direct click intercepted for candidate {i}: {ce} — trying JS click")
+                            self.driver.execute_script("arguments[0].click();", btn)
                         logger.info(f"✅ Successfully clicked cart button candidate {i}: '{text}'")
                         time.sleep(1)
                         return True
@@ -1063,11 +1154,19 @@ class FormFiller:
             
             for xpath in cart_xpaths:
                 try:
+                    try:
+                        self._dismiss_popups_and_overlays_quick()
+                    except Exception:
+                        pass
                     elements = self.driver.find_elements(By.XPATH, xpath)
                     for element in elements:
                         if element.is_displayed() and element.is_enabled():
                             element_text = element.get_attribute('value') or element.text or 'no-text'
                             logger.info(f"Trying XPath cart button: '{element_text}'")
+                            try:
+                                self.driver.execute_script("arguments[0].scrollIntoView({behavior:'instant',block:'center'});", element)
+                            except Exception:
+                                pass
                             element.click()
                             logger.info(f"✅ Successfully clicked XPath cart button: '{element_text}'")
                             time.sleep(1)
