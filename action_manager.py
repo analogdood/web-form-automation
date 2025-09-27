@@ -162,7 +162,7 @@ class ActionFileManager:
                 action=ActionType.WAIT_FOR_URL_CHANGE.value,
                 value="confirmation",
                 description="Wait for confirmation page",
-                timeout=15.0
+                timeout=20.0
             ),
             ActionStep(
                 action=ActionType.CONFIRM_CHECKBOX.value,
