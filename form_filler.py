@@ -232,77 +232,96 @@ class FormFiller:
         Returns:
             bool: True if successful, False otherwise
         """
-        try:
-            # Check if checkbox is already selected
-            if checkbox_element.is_selected():
-                logger.debug(f"Checkbox {checkbox_name} is already selected")
-                return True
-
-            # Time the operation for adaptive wait learning
-            with TimedOperation(self.adaptive_wait, 'click'):
-                # Scroll element into view first (no sleep, scroll is instant)
-                try:
-                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", checkbox_element)
-                except Exception as e:
-                    logger.debug(f"Scroll failed for {checkbox_name}: {e}")
-
-                # Get optimal timeout from adaptive wait manager
-                click_timeout = self.adaptive_wait.get_click_timeout(default=2.0, max_timeout=5.0)
-
-                # Try direct click first (faster approach)
-                try:
-                    checkbox_element.click()
-                    logger.debug(f"Direct click initiated for {checkbox_name}")
-
-                    # Wait for checkbox to be selected (with adaptive timeout)
-                    WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
-                        lambda d: checkbox_element.is_selected()
-                    )
-                    logger.debug(f"Checkbox {checkbox_name} verified as selected")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Check if checkbox is already selected
+                if checkbox_element.is_selected():
+                    logger.debug(f"Checkbox {checkbox_name} is already selected")
                     return True
 
-                except TimeoutException:
-                    logger.warning(f"Checkbox {checkbox_name} direct click did not register in time, trying alternatives")
-
-                except Exception as click_error:
-                    logger.debug(f"Direct click failed for {checkbox_name}: {click_error}")
-
-                # Try JavaScript click as fallback
-                try:
-                    self.driver.execute_script("arguments[0].click();", checkbox_element)
-                    logger.debug(f"JavaScript click initiated for {checkbox_name}")
-
-                    # Wait for selection with adaptive timeout
-                    WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
-                        lambda d: checkbox_element.is_selected()
-                    )
-                    logger.debug(f"Checkbox {checkbox_name} verified as selected (JS click)")
-                    return True
-
-                except TimeoutException:
-                    logger.warning(f"Checkbox {checkbox_name} JavaScript click did not register in time")
-                    return False
-                except Exception as js_error:
-                    logger.debug(f"JavaScript click also failed for {checkbox_name}: {js_error}")
-
-                    # Last resort: try with explicit wait for clickable
+                # Time the operation for adaptive wait learning
+                with TimedOperation(self.adaptive_wait, 'click'):
+                    # Scroll element into view first (no sleep, scroll is instant)
                     try:
-                        WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
-                            EC.element_to_be_clickable(checkbox_element)
-                        )
-                        checkbox_element.click()
+                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", checkbox_element)
+                    except Exception as e:
+                        logger.debug(f"Scroll failed for {checkbox_name}: {e}")
 
-                        # Verify selection
+                    # Get optimal timeout from adaptive wait manager
+                    click_timeout = self.adaptive_wait.get_click_timeout(default=2.0, max_timeout=5.0)
+
+                    # Try direct click first (faster approach)
+                    try:
+                        checkbox_element.click()
+                        logger.debug(f"Direct click initiated for {checkbox_name}")
+
+                        # Wait for checkbox to be selected (with adaptive timeout)
                         WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
                             lambda d: checkbox_element.is_selected()
                         )
+                        logger.debug(f"Checkbox {checkbox_name} verified as selected")
                         return True
-                    except:
-                        return False
 
-        except Exception as e:
-            logger.error(f"All click methods failed for {checkbox_name}: {e}")
-            return False
+                    except ElementClickInterceptedException:
+                        logger.warning(f"Click intercepted for {checkbox_name} (attempt {attempt+1}/{max_retries}) - likely popup")
+                        # Try to close popups then continue to next attempt
+                        self._dismiss_popups_and_overlays_quick()
+                        continue
+                    
+                    except TimeoutException:
+                        logger.warning(f"Checkbox {checkbox_name} direct click did not register in time, trying alternatives")
+
+                    except Exception as click_error:
+                        logger.debug(f"Direct click failed for {checkbox_name}: {click_error}")
+
+                    # Try JavaScript click as fallback
+                    try:
+                        self.driver.execute_script("arguments[0].click();", checkbox_element)
+                        logger.debug(f"JavaScript click initiated for {checkbox_name}")
+
+                        # Wait for selection with adaptive timeout
+                        WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
+                            lambda d: checkbox_element.is_selected()
+                        )
+                        logger.debug(f"Checkbox {checkbox_name} verified as selected (JS click)")
+                        return True
+
+                    except TimeoutException:
+                        logger.warning(f"Checkbox {checkbox_name} JavaScript click did not register in time")
+                        return False
+                    except Exception as js_error:
+                        logger.debug(f"JavaScript click also failed for {checkbox_name}: {js_error}")
+
+                        # Last resort: try with explicit wait for clickable
+                        try:
+                            WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
+                                EC.element_to_be_clickable(checkbox_element)
+                            )
+                            checkbox_element.click()
+
+                            # Verify selection
+                            WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
+                                lambda d: checkbox_element.is_selected()
+                            )
+                            return True
+                        except ElementClickInterceptedException:
+                            logger.warning(f"Last resort click intercepted for {checkbox_name} (attempt {attempt+1}/{max_retries})")
+                            self._dismiss_popups_and_overlays_quick()
+                            continue
+                        except:
+                            if attempt < max_retries - 1:
+                                continue
+                            return False
+
+            except Exception as e:
+                logger.error(f"Error clicking {checkbox_name} (attempt {attempt+1}): {e}")
+                if attempt < max_retries - 1:
+                     continue
+                return False
+        
+        logger.error(f"Failed to click {checkbox_name} after {max_retries} attempts")
+        return False
     
     def submit_form(self) -> bool:
         """
