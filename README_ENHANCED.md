@@ -70,7 +70,7 @@ enhanced_gui_automation.py # 発展版GUI
     {
       "action": "wait_for_url_change",
       "value": "confirmation",
-      "timeout": 15.0
+      "timeout": 20.0
     }
   ]
 }
@@ -118,7 +118,7 @@ python enhanced_automation.py \
   --url "https://example.com/form" \
   --actions "my_actions.json" \
   --browser chrome \
-  --timeout 15
+  --timeout 20
 
 # 大量データ実行
 python enhanced_automation.py \

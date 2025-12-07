@@ -60,7 +60,7 @@ def test_complete_loop_automation():
         # Initialize complete automation
         automation = CompleteTotoAutomation(
             headless=False,  # Visible browser for testing
-            timeout=15
+            timeout=20
         )
         
         # Execute complete workflow
@@ -105,7 +105,7 @@ def test_loop_navigation_only():
         from config import Config
         
         # Setup WebDriver
-        webdriver_manager = WebDriverManager(headless=False, timeout=15)
+        webdriver_manager = WebDriverManager(headless=False, timeout=20)
         
         if not webdriver_manager.setup_driver():
             logger.error("❌ Failed to setup WebDriver")

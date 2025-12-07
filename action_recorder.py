@@ -251,13 +251,13 @@ class ActionRecorder:
         print(f"Current URL: {current_url}")
         
         expected_pattern = input("Enter expected URL pattern/substring: ").strip()
-        timeout = input("Enter timeout in seconds (default 15): ").strip()
+        timeout = input("Enter timeout in seconds (default 20): ").strip()
         description = input("Enter description (optional): ").strip()
         
         try:
-            timeout = float(timeout) if timeout else 15.0
+            timeout = float(timeout) if timeout else 20.0
         except ValueError:
-            timeout = 15.0
+            timeout = 20.0
         
         action = ActionStep(
             action=ActionType.WAIT_FOR_URL_CHANGE.value,
@@ -393,7 +393,7 @@ class ActionRecorder:
             action=ActionType.WAIT_FOR_URL_CHANGE.value,
             value=pattern,
             description=f"Wait for URL change to contain: {pattern}",
-            timeout=15.0
+            timeout=20.0
         )
         
         self.recorded_actions.append(action)

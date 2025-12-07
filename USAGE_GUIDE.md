@@ -143,7 +143,7 @@ python3 enhanced_automation.py --mode basic --csv your_data.csv --url "https://w
 ### Browser Settings
 - **Default Browser**: Edge (can be changed in config.py)
 - **Headless Mode**: Disabled by default (browser window visible)
-- **Timeout**: 15 seconds for page operations
+- **Timeout**: 20 seconds for page operations
 
 ### Form Settings
 - **Max Sets per Batch**: 10 sets

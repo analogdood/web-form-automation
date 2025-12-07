@@ -587,15 +587,19 @@ class WebDriverManager:
             return False
 
     # --- Unexpected popup helpers ---
-    def close_unexpected_popups(self, max_iframes: int = 5) -> int:
+    def close_unexpected_popups(self, max_iframes: int = 3, quick: bool = False) -> int:
         """
         Try to close common unexpected modals/popups/overlays including alerts.
+
+        Args:
+            max_iframes: Maximum number of iframes to scan
+            quick: If True, use even faster timeout (0.5s instead of 1.0s)
 
         Returns: number of popups likely handled
         """
         handled = 0
         start = time.time()
-        budget_sec = 2.5  # keep this quick to avoid blocking main flow
+        budget_sec = 0.5 if quick else 1.0  # Reduced from 2.5s for faster processing
         driver = self.driver
         assert driver is not None
 
@@ -606,21 +610,20 @@ class WebDriverManager:
         except Exception:
             pass
 
+        # Prioritized selectors: most common patterns first for faster detection
         selectors: List[str] = [
-            "[aria-label='close']",
-            "[aria-label='Close']",
-            "[data-testid*='close']",
+            "//*[text()='×' or text()='✕']",  # Most common close symbol
             "button.close",
+            "[aria-label='Close']",
+            "[aria-label='close']",
             "button[title*='閉じ']",
             "button[aria-label*='閉じ']",
+            "//button[contains(normalize-space(),'閉じる')]",
             "[class*='close']",
             ".modal .close",
             ".popup .close",
-            ".overlay .close",
-            ".dialog .close",
-            "//button[contains(normalize-space(),'閉じる')]",
+            "[data-testid*='close']",
             "//a[contains(normalize-space(),'閉じる')]",
-            "//*[text()='×' or text()='✕']",
         ]
 
         def try_close_in_context_quick() -> int:
@@ -640,6 +643,9 @@ class WebDriverManager:
                             if e.is_displayed() and e.is_enabled():
                                 e.click()
                                 c += 1
+                                # Early exit after closing one popup for speed
+                                if quick:
+                                    return c
                         except Exception:
                             continue
                 except Exception:

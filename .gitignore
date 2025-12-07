@@ -1,11 +1,11 @@
-# Python
+# Python bytecode & caches
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
+
+# Python build & packaging
 .Python
 build/
-develop-eggs/
 dist/
 downloads/
 eggs/
@@ -22,64 +22,69 @@ wheels/
 MANIFEST
 
 # PyInstaller
-*.manifest
 *.spec
+*.manifest
 
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage reports
+# Test & coverage artifacts
 htmlcov/
 .tox/
 .coverage
 .coverage.*
-.cache
+.pytest_cache/
 nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
-.pytest_cache/
 
 # Virtual environments
+.venv/
 venv/
 env/
 ENV/
-.venv/
 
-# IDEs
+# IDE / editor tooling
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS files
+# OS metadata
 .DS_Store
 Thumbs.db
-
-# Application specific
-logs/
-screenshots/
-*.log
-*.png
-*.jpg
-*.jpeg
-
-# Selenium
-chromedriver
-geckodriver
-edgedriver
-
-# Data files (except sample)
-*.csv
-!sample_data.csv
 
 # Environment & secrets
 .env
 .env.*
 .python-version
 
-# Type checkers / linters caches
+# Application artifacts
+logs/
+screenshots/
+artifacts/
+reports/
+drivers/
+selenium-driver/
+*.log
+
+# Generated visual assets
+*.png
+*.jpg
+*.jpeg
+
+# Selenium drivers
+chromedriver
+geckodriver
+edgedriver
+
+# Data files (keep sample)
+*.csv
+!sample_data.csv
+
+# Type checker & linter caches
 .mypy_cache/
 .ruff_cache/
 .pylint.d/
@@ -88,17 +93,9 @@ edgedriver
 # Jupyter
 .ipynb_checkpoints/
 
-# Generic caches
+# Generic caches & temporary files
 .cache/
-
-# Temp files
 *.tmp
 *.temp
 *.bak
 *.orig
-
-# Local artifacts (safe to ignore if generated)
-drivers/
-selenium-driver/
-artifacts/
-reports/

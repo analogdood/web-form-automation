@@ -694,14 +694,30 @@ class EnhancedAutomationSystem:
                 if "PGSPSL00001MoveSingleVoteSheet.form" in current_url:
                     self.logger.info(f"✅ Detected voting page: {current_url}")
                     self.logger.info("Waiting for page to fully load...")
-                    time.sleep(5)  # Longer wait for full page load
-                    
-                    # Scroll down to ensure all 13 games are loaded
+
+                    # Wait for page to be fully ready with dynamic timeout
+                    try:
+                        from selenium.webdriver.support.ui import WebDriverWait
+                        from selenium.webdriver.support import expected_conditions as EC
+                        from selenium.webdriver.common.by import By
+
+                        # Wait for document ready state
+                        WebDriverWait(self.webdriver_manager.driver, 10, poll_frequency=0.1).until(
+                            lambda d: d.execute_script("return document.readyState") == "complete"
+                        )
+
+                        # Wait for at least one voting checkbox to appear (indicates form is loaded)
+                        WebDriverWait(self.webdriver_manager.driver, 5, poll_frequency=0.1).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='checkbox'][name^='chkbox_']"))
+                        )
+                        self.logger.info("✅ Page fully loaded - checkboxes detected")
+                    except Exception as e:
+                        self.logger.warning(f"Page load wait exception (continuing anyway): {e}")
+
+                    # Scroll down to ensure all 13 games are loaded (no sleep needed)
                     try:
                         self.webdriver_manager.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                        time.sleep(2)
                         self.webdriver_manager.driver.execute_script("window.scrollTo(0, 0);")
-                        time.sleep(1)
                         self.logger.info("Page scrolled to ensure all elements are loaded")
                     except:
                         pass

@@ -32,7 +32,7 @@ def test_complete_navigation_flow():
     logger.info("🚀 Starting complete navigation flow test...")
     
     # Setup WebDriver
-    webdriver_manager = WebDriverManager(headless=False, timeout=15)
+    webdriver_manager = WebDriverManager(headless=False, timeout=20)
     
     if not webdriver_manager.setup_driver():
         logger.error("❌ Failed to setup WebDriver")
@@ -83,7 +83,7 @@ def test_individual_components():
     logger.info("🔍 Starting individual component tests...")
     
     # Setup WebDriver
-    webdriver_manager = WebDriverManager(headless=False, timeout=15)
+    webdriver_manager = WebDriverManager(headless=False, timeout=20)
     
     if not webdriver_manager.setup_driver():
         logger.error("❌ Failed to setup WebDriver")

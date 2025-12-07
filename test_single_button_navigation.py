@@ -32,7 +32,7 @@ def test_enhanced_navigation_with_single():
     logger.info("🚀 Starting enhanced navigation flow test with single button...")
     
     # Setup WebDriver
-    webdriver_manager = WebDriverManager(headless=False, timeout=15)
+    webdriver_manager = WebDriverManager(headless=False, timeout=20)
     
     if not webdriver_manager.setup_driver():
         logger.error("❌ Failed to setup WebDriver")
@@ -91,7 +91,7 @@ def test_individual_buttons():
     logger.info("🔍 Starting individual button tests...")
     
     # Setup WebDriver
-    webdriver_manager = WebDriverManager(headless=False, timeout=15)
+    webdriver_manager = WebDriverManager(headless=False, timeout=20)
     
     if not webdriver_manager.setup_driver():
         logger.error("❌ Failed to setup WebDriver")

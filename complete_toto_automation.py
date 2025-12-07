@@ -25,7 +25,7 @@ LOGIN_URL = "https://store.toto-dream.com/dcs/subos/screen/pm01/spmb000/PGSPMB00
 class CompleteTotoAutomation:
     """Complete end-to-end toto automation workflow"""
     
-    def __init__(self, headless: bool = False, timeout: int = 15, keep_browser_open: bool = True,
+    def __init__(self, headless: bool = False, timeout: int = 20, keep_browser_open: bool = True,
                  username: str | None = None, password: str | None = None,
                  show_end: bool = False):
         self.headless = headless
@@ -103,7 +103,7 @@ class CompleteTotoAutomation:
             logger.warning("WebDriver not ready for login yet")
             return False
         driver = wm.driver
-        to = timeout or getattr(self, "timeout", 15)
+        to = timeout or getattr(self, "timeout", 20)
 
         try:
             # 事前に邪魔なポップアップは軽く掃除
@@ -302,15 +302,13 @@ class CompleteTotoAutomation:
         """Navigate to toto site and select round"""
         try:
             logger.info("🧭 Starting navigation and round selection...")
-            # Proactively close unexpected popups (quick scan) and log elapsed
+
+            # Quick popup scan after initial page load (high probability of popup appearance)
             if self.webdriver_manager:
                 try:
-                    t0 = time.time()
-                    closed = self.webdriver_manager.close_unexpected_popups()
-                    dt = (time.time() - t0)
-                    logger.debug(f"Popup quick-scan closed={closed}, elapsed={dt:.2f}s")
-                except Exception as _e:
-                    logger.debug(f"Popup quick-scan skipped: {_e}")
+                    self.webdriver_manager.close_unexpected_popups(quick=True)
+                except Exception:
+                    pass
 
             # Ensure components are initialized (helps static analyzers and avoids None access)
             assert self.round_selector is not None, "Round selector not initialized"
@@ -338,12 +336,6 @@ class CompleteTotoAutomation:
                 if not self.round_selector.navigate_to_start_page(Config.START_URL):
                     logger.error("❌ Failed to navigate to start page")
                     return False
-                # Clear any modals
-                try:
-                    self.webdriver_manager.close_unexpected_popups()
-                except Exception:
-                    pass
-
                 # If login page appears, try automatic login when credentials are provided
                 self._maybe_login()
                 
@@ -374,10 +366,14 @@ class CompleteTotoAutomation:
                 if not self.round_selector.click_voting_prediction_button():
                     logger.error("❌ Failed to click voting prediction button")
                     return False
-                try:
-                    self.webdriver_manager.close_unexpected_popups()
-                except Exception:
-                    pass
+
+                # Quick popup check after clicking voting button (page transition)
+                if self.webdriver_manager:
+                    try:
+                        self.webdriver_manager.close_unexpected_popups(quick=True)
+                    except Exception:
+                        pass
+
                 self._maybe_login()
                 
             else:
@@ -387,10 +383,14 @@ class CompleteTotoAutomation:
                 if not self.round_selector.navigate_to_voting_prediction():
                     logger.error("❌ Automatic navigation failed")
                     return False
-                try:
-                    self.webdriver_manager.close_unexpected_popups()
-                except Exception:
-                    pass
+
+                # Quick popup check after automatic navigation (page transition)
+                if self.webdriver_manager:
+                    try:
+                        self.webdriver_manager.close_unexpected_popups(quick=True)
+                    except Exception:
+                        pass
+
                 self._maybe_login()
             
             # Verify we reached voting page
@@ -452,10 +452,10 @@ class CompleteTotoAutomation:
                     logger.warning("⚠️ Batch failed. Continuing with next batch...")
                     # In a real scenario, you might want to stop or ask user
                 
-                # Pause between batches
+                # Brief pause between batches (reduced from 2s to allow faster processing)
                 if batch_index < len(batches) - 1:
-                    logger.info("⏳ Pausing between batches...")
-                    time.sleep(2)
+                    logger.info("⏳ Preparing next batch...")
+                    # No fixed sleep - navigation to next batch will handle timing
             
             # Check overall success
             if self.stats["successful_batches"] > 0:
@@ -476,7 +476,14 @@ class CompleteTotoAutomation:
 
             # If redirected to login at any point, try to log in
             self._maybe_login()
-            
+
+            # Quick popup check at batch start (may appear during navigation between batches)
+            if self.webdriver_manager:
+                try:
+                    self.webdriver_manager.close_unexpected_popups(quick=True)
+                except Exception:
+                    pass
+
             # For batches after the first, ensure we're on the single voting page.
             # Prefer returning via the cart page's "totoの投票を追加する" to guarantee additive behavior.
             if batch_number > 1:
@@ -509,11 +516,6 @@ class CompleteTotoAutomation:
                         if not (self.round_selector and self.round_selector.click_single_button()):
                             logger.error("❌ Failed to click single button")
                             return False
-                if self.webdriver_manager:
-                    try:
-                        self.webdriver_manager.close_unexpected_popups()
-                    except Exception:
-                        pass
             
             # Fill form with batch data
             logger.info("📝 Filling voting form...")
@@ -522,12 +524,7 @@ class CompleteTotoAutomation:
                 return False
             
             logger.info("✅ Form filled successfully")
-            if self.webdriver_manager:
-                try:
-                    self.webdriver_manager.close_unexpected_popups()
-                except Exception:
-                    pass
-            
+
             # Submit form (add to cart)
             logger.info("🛒 Submitting form (adding to cart)...")
             if not (self.form_filler and self.form_filler.submit_form()):
@@ -535,12 +532,7 @@ class CompleteTotoAutomation:
                 return False
             
             logger.info("✅ Form submitted successfully")
-            if self.webdriver_manager:
-                try:
-                    self.webdriver_manager.close_unexpected_popups()
-                except Exception:
-                    pass
-            
+
             # Handle any alerts
             if self.webdriver_manager:
                 try:

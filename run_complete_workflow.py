@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--round", dest="round_number", help="Round number to select (e.g., 1558)")
     parser.add_argument("--auto-round", action="store_true", help="Try to extract round from CSV filename (fallback to latest)")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
-    parser.add_argument("--timeout", type=int, default=15, help="Driver timeout seconds (default: 15)")
+    parser.add_argument("--timeout", type=int, default=20, help="Driver timeout seconds (default: 20)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("--show-end", action="store_true", help="After finish, open the final page in a visible browser (restores session)")
     parser.add_argument("--username", help="Username for site login (optional)")

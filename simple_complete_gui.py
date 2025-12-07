@@ -79,7 +79,7 @@ class CompleteWorkflowGUI:
         self.round_manual_var = tk.StringVar()
         self.headless_var = tk.BooleanVar(value=False)
         self.keep_open_var = tk.BooleanVar(value=True)
-        self.timeout_var = tk.IntVar(value=15)
+        self.timeout_var = tk.IntVar(value=20)
         self.username_var = tk.StringVar()
         self.password_var = tk.StringVar()
 
@@ -245,12 +245,35 @@ class CompleteWorkflowGUI:
             ok = automation.execute_complete_workflow(csv_path, round_number)
             if ok:
                 logging.info("✅ 完了: すべてのバッチが処理されました。")
+
+                # Get statistics from automation
+                stats = automation.stats
+                total_time = stats.get("end_time", 0) - stats.get("start_time", 0)
+                total_sets = stats.get("total_sets", 0)
+                successful_batches = stats.get("successful_batches", 0)
+                total_batches = stats.get("total_batches", 0)
+
                 def _done_msg():
+                    base_msg = ""
                     if keep_open:
-                        return "全バッチの処理が完了しました。ブラウザは開いたままです。"
-                    if headless:
-                        return "全バッチの処理が完了しました。完了ページを可視ブラウザで表示しました。"
-                    return "全バッチの処理が完了しました。"
+                        base_msg = "全バッチの処理が完了しました。ブラウザは開いたままです。"
+                    elif headless:
+                        base_msg = "全バッチの処理が完了しました。完了ページを可視ブラウザで表示しました。"
+                    else:
+                        base_msg = "全バッチの処理が完了しました。"
+
+                    # Add statistics
+                    stats_msg = f"\n\n📊 処理統計:\n"
+                    stats_msg += f"• セット数: {total_sets}\n"
+                    stats_msg += f"• バッチ成功: {successful_batches}/{total_batches}\n"
+                    if total_time > 0:
+                        stats_msg += f"• 処理時間: {total_time:.1f}秒\n"
+                        if total_sets > 0:
+                            rate = total_sets / total_time
+                            stats_msg += f"• 処理速度: {rate:.2f} セット/秒"
+
+                    return base_msg + stats_msg
+
                 self.root.after(0, lambda: messagebox.showinfo("完了", _done_msg()))
             else:
                 logging.error("❌ 失敗: ワークフローに失敗しました。ログを確認してください。")

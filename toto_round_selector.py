@@ -747,7 +747,14 @@ class TotoRoundSelector:
             
             # Step 4: Wait and verify we're on the correct page
             logger.info("📍 Step 4: Verify round info page and look for voting prediction button")
-            time.sleep(2)  # Additional wait for page to fully load
+
+            # Wait for page to be ready (no fixed sleep)
+            try:
+                WebDriverWait(self.driver, 5, poll_frequency=0.1).until(
+                    lambda d: d.execute_script("return document.readyState") == "complete"
+                )
+            except:
+                pass
             
             # Step 5: Click voting prediction button (this now automatically clicks single too)
             logger.info("📍 Step 5: Click '今すぐ投票予想する' button (will auto-click 'シングル' too)")
@@ -843,7 +850,13 @@ class TotoRoundSelector:
                             if close_element.is_displayed() and close_element.is_enabled():
                                 logger.info(f"🔧 Clicking close button: {close_selector}")
                                 close_element.click()
-                                time.sleep(1)
+                                # Brief wait for modal to disappear (no fixed sleep)
+                                try:
+                                    WebDriverWait(self.driver, 1, poll_frequency=0.1).until(
+                                        lambda d: not close_element.is_displayed()
+                                    )
+                                except:
+                                    pass
                                 logger.info("✅ Modal dialog closed")
                                 return
                                 
@@ -856,11 +869,10 @@ class TotoRoundSelector:
                     from selenium.webdriver.common.keys import Keys
                     logger.info("🔧 Trying to close modal with Escape key...")
                     self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-                    time.sleep(1)
                     logger.info("✅ Sent Escape key to close modal")
                 except Exception as e:
                     logger.debug(f"Escape key failed: {e}")
-                
+
                 # Try clicking backdrop to close modal
                 try:
                     logger.info("🔧 Trying to click modal backdrop...")
@@ -868,7 +880,6 @@ class TotoRoundSelector:
                     for backdrop in backdrop_elements:
                         if backdrop.is_displayed():
                             backdrop.click()
-                            time.sleep(1)
                             logger.info("✅ Clicked modal backdrop")
                             return
                 except Exception as e:
@@ -902,8 +913,7 @@ class TotoRoundSelector:
             # Strategy 2: Scroll into view and click
             try:
                 logger.debug("🔧 Trying scroll into view and click...")
-                self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
-                time.sleep(1)
+                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", element)
                 element.click()
                 logger.info("✅ Scroll and click successful")
                 return True

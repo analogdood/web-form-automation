@@ -5,8 +5,9 @@ Form Filler for Web Form Automation System
 import logging
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import (
-    TimeoutException, 
+    TimeoutException,
     NoSuchElementException,
     ElementNotInteractableException,
     ElementClickInterceptedException,
@@ -14,17 +15,19 @@ from selenium.common.exceptions import (
 from typing import List, Dict, Optional
 from config import Config
 from web_driver_manager import WebDriverManager
+from adaptive_wait import AdaptiveWaitManager, TimedOperation
 import time
 
 logger = logging.getLogger(__name__)
 
 class FormFiller:
     """Handles form filling operations with checkbox interactions"""
-    
+
     def __init__(self, webdriver_manager: WebDriverManager):
         self.driver_manager = webdriver_manager
         self.driver = webdriver_manager.driver
         self.wait = webdriver_manager.wait
+        self.adaptive_wait = AdaptiveWaitManager(max_history=20)
         
     def fill_voting_form(self, batch_data: List[List[int]]) -> bool:
         """
@@ -82,9 +85,7 @@ class FormFiller:
                     if not success:
                         logger.error(f"Failed to click checkbox for game {game_index + 1}, set {set_index + 1}, value {vote_value}")
                         return False
-                    
-                    # Small delay between clicks
-                    time.sleep(0.1)
+                    # No delay needed - _safe_click_checkbox now verifies reflection
                 
                 logger.info(f"Successfully filled game {game_index + 1}")
             
@@ -121,9 +122,7 @@ class FormFiller:
                 if not success:
                     logger.error(f"Failed to click checkbox for game {game_index + 1}, set {set_index + 1}, value {vote_value}")
                     return False
-                
-                # Small delay between clicks
-                time.sleep(0.2)
+                # No delay needed - _safe_click_checkbox now verifies reflection
             
             return True
             
@@ -224,12 +223,12 @@ class FormFiller:
     
     def _safe_click_checkbox(self, checkbox_element: object, checkbox_name: str) -> bool:
         """
-        Safely click a checkbox element
-        
+        Safely click a checkbox element with reflection verification
+
         Args:
             checkbox_element: WebElement to click
             checkbox_name: Name for logging purposes
-            
+
         Returns:
             bool: True if successful, False otherwise
         """
@@ -238,48 +237,69 @@ class FormFiller:
             if checkbox_element.is_selected():
                 logger.debug(f"Checkbox {checkbox_name} is already selected")
                 return True
-            
-            # Scroll element into view first
-            try:
-                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", checkbox_element)
-                time.sleep(0.2)  # Wait for scroll to complete
-            except Exception as e:
-                logger.debug(f"Scroll failed for {checkbox_name}: {e}")
-            
-            # Try direct click first (faster approach)
-            try:
-                checkbox_element.click()
-                logger.debug(f"Direct click successful for {checkbox_name}")
-                
-                # Verify it was clicked
-                if checkbox_element.is_selected():
+
+            # Time the operation for adaptive wait learning
+            with TimedOperation(self.adaptive_wait, 'click'):
+                # Scroll element into view first (no sleep, scroll is instant)
+                try:
+                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", checkbox_element)
+                except Exception as e:
+                    logger.debug(f"Scroll failed for {checkbox_name}: {e}")
+
+                # Get optimal timeout from adaptive wait manager
+                click_timeout = self.adaptive_wait.get_click_timeout(default=2.0, max_timeout=5.0)
+
+                # Try direct click first (faster approach)
+                try:
+                    checkbox_element.click()
+                    logger.debug(f"Direct click initiated for {checkbox_name}")
+
+                    # Wait for checkbox to be selected (with adaptive timeout)
+                    WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
+                        lambda d: checkbox_element.is_selected()
+                    )
+                    logger.debug(f"Checkbox {checkbox_name} verified as selected")
                     return True
-                else:
-                    logger.warning(f"Checkbox {checkbox_name} direct click did not register")
-                    
-            except Exception as click_error:
-                logger.debug(f"Direct click failed for {checkbox_name}: {click_error}")
-                # Try JavaScript click immediately
+
+                except TimeoutException:
+                    logger.warning(f"Checkbox {checkbox_name} direct click did not register in time, trying alternatives")
+
+                except Exception as click_error:
+                    logger.debug(f"Direct click failed for {checkbox_name}: {click_error}")
+
+                # Try JavaScript click as fallback
                 try:
                     self.driver.execute_script("arguments[0].click();", checkbox_element)
-                    logger.debug(f"JavaScript click successful for {checkbox_name}")
-                    
-                    # Verify it was clicked
-                    if checkbox_element.is_selected():
-                        return True
-                    else:
-                        logger.warning(f"Checkbox {checkbox_name} JavaScript click did not register")
-                        return False
+                    logger.debug(f"JavaScript click initiated for {checkbox_name}")
+
+                    # Wait for selection with adaptive timeout
+                    WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
+                        lambda d: checkbox_element.is_selected()
+                    )
+                    logger.debug(f"Checkbox {checkbox_name} verified as selected (JS click)")
+                    return True
+
+                except TimeoutException:
+                    logger.warning(f"Checkbox {checkbox_name} JavaScript click did not register in time")
+                    return False
                 except Exception as js_error:
                     logger.debug(f"JavaScript click also failed for {checkbox_name}: {js_error}")
-                    # Last resort: try with wait
+
+                    # Last resort: try with explicit wait for clickable
                     try:
-                        self.wait.until(EC.element_to_be_clickable(checkbox_element))
+                        WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
+                            EC.element_to_be_clickable(checkbox_element)
+                        )
                         checkbox_element.click()
-                        return checkbox_element.is_selected()
+
+                        # Verify selection
+                        WebDriverWait(self.driver, click_timeout, poll_frequency=0.05).until(
+                            lambda d: checkbox_element.is_selected()
+                        )
+                        return True
                     except:
                         return False
-                
+
         except Exception as e:
             logger.error(f"All click methods failed for {checkbox_name}: {e}")
             return False
@@ -310,9 +330,8 @@ class FormFiller:
                 initial_height = self.driver.execute_script("return document.body.scrollHeight")
                 logger.info(f"Initial page height: {initial_height}px")
                 
-                # Scroll to very bottom
+                # Scroll to very bottom (no wait needed, scroll is instant)
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(2)
                 
                 # Scroll down in multiple steps to load dynamic content
                 for step in range(5):
@@ -329,14 +348,12 @@ class FormFiller:
                     if new_height > current_height:
                         logger.info(f"New content loaded, height increased to {new_height}px")
                 
-                # Final scroll to absolute bottom
+                # Final scroll to absolute bottom (no wait, scroll is instant)
                 final_height = self.driver.execute_script("return document.body.scrollHeight")
                 self.driver.execute_script(f"window.scrollTo(0, {final_height});")
-                time.sleep(2)
-                
-                # Also try scrolling the document element (sometimes needed)
+
+                # Also try scrolling the document element (sometimes needed, no wait)
                 self.driver.execute_script("document.documentElement.scrollTop = document.documentElement.scrollHeight;")
-                time.sleep(1)
                 
                 final_scroll_position = self.driver.execute_script("return window.pageYOffset")
                 logger.info(f"✅ Final scroll position: {final_scroll_position}px of {final_height}px")
@@ -612,25 +629,33 @@ class FormFiller:
         """
         try:
             logger.info("🔍 Checking for confirmation dialog after cart button click...")
-            
-            # Wait longer for dialog to appear
-            time.sleep(3)
-            
-            # Method 1: More aggressive JavaScript alert handling
+
+            # Use adaptive wait for submit operations (reduced timeout for faster processing)
+            submit_timeout = self.adaptive_wait.get_submit_timeout(default=3.0, max_timeout=5.0)
+
+            # Method 1: More aggressive JavaScript alert handling with adaptive timeout
             logger.info("Method 1: Aggressive JavaScript alert handling...")
-            for attempt in range(10):  # Try 10 times over 5 seconds
+            max_attempts = int(submit_timeout / 0.3)  # Check every 0.3 seconds (faster polling)
+            for attempt in range(max_attempts):
                 try:
                     alert = self.driver.switch_to.alert
                     alert_text = alert.text
                     logger.info(f"✅ Found JavaScript alert (attempt {attempt + 1}): '{alert_text}'")
                     alert.accept()  # Click OK
                     logger.info("✅ JavaScript alert accepted (OK clicked)")
-                    time.sleep(2)
+
+                    # Wait briefly for any page transition after alert
+                    try:
+                        WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
+                            lambda d: d.execute_script("return document.readyState") == "complete"
+                        )
+                    except:
+                        pass
                     return True
                 except Exception as e:
-                    if attempt < 9:  # Don't log error on last attempt
+                    if attempt < max_attempts - 1:  # Don't log error on last attempt
                         logger.debug(f"Attempt {attempt + 1}: No alert yet: {e}")
-                        time.sleep(0.5)
+                        time.sleep(0.3)  # Reduced from 0.5s for faster response
                     continue
             
             logger.info("No JavaScript alert found after 10 attempts")
@@ -643,7 +668,13 @@ class FormFiller:
                 logger.info(f"✅ Found immediate alert: '{alert_text}'")
                 alert.accept()
                 logger.info("✅ Immediate alert accepted")
-                time.sleep(2)
+                # Wait for page transition
+                try:
+                    WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
+                except:
+                    pass
                 return True
             except Exception as e:
                 logger.debug(f"No immediate alert: {e}")
@@ -713,14 +744,22 @@ class FormFiller:
                                 try:
                                     element.click()
                                     logger.info(f"✅ Clicked confirmation button: '{element_text}'")
-                                    time.sleep(3)  # Wait longer after click
-                                    
+
+                                    # Wait for page transition with dynamic check
+                                    try:
+                                        WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
+                                            lambda d: d.current_url != current_url or
+                                                    d.execute_script("return document.readyState") == "complete"
+                                        )
+                                    except:
+                                        pass
+
                                     # Check if URL changed (redirect to result page)
                                     new_url = self.driver.current_url
                                     if new_url != current_url:
                                         logger.info(f"✅ URL changed after button click: {new_url}")
                                         return True
-                                    
+
                                     return True
                                 except Exception as click_error:
                                     logger.debug(f"Failed to click button '{element_text}': {click_error}")
@@ -729,7 +768,7 @@ class FormFiller:
                     except Exception as e:
                         logger.debug(f"Selector {selector} attempt {attempt + 1} failed: {e}")
                         if attempt < 2:  # Wait before retry
-                            time.sleep(0.5)
+                            time.sleep(0.2)  # Reduced from 0.5s for faster retry
                         continue
             
             # Method 4: Try pressing Enter key (sometimes works for dialogs)
@@ -739,18 +778,32 @@ class FormFiller:
                 # Try Enter on body
                 self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ENTER)
                 logger.info("✅ Pressed Enter key on body")
-                time.sleep(2)
-                
+
+                # Wait for potential page transition
+                try:
+                    WebDriverWait(self.driver, 1, poll_frequency=0.1).until(
+                        lambda d: d.current_url != current_url
+                    )
+                except:
+                    pass
+
                 # Check if URL changed after Enter
                 new_url = self.driver.current_url
                 if new_url != current_url:
                     logger.info(f"✅ URL changed after Enter key: {new_url}")
                     return True
-                
+
                 # Try Space key as well (sometimes confirms dialogs)
                 self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.SPACE)
                 logger.info("✅ Pressed Space key")
-                time.sleep(2)
+
+                # Wait for potential page transition
+                try:
+                    WebDriverWait(self.driver, 1, poll_frequency=0.1).until(
+                        lambda d: d.current_url != current_url
+                    )
+                except:
+                    pass
                 
                 return True
             except Exception as e:
