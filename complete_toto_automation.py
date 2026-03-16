@@ -460,6 +460,12 @@ class CompleteTotoAutomation:
             # Check overall success
             if self.stats["successful_batches"] > 0:
                 logger.info(f"🎉 Batch processing completed: {self.stats['successful_batches']}/{self.stats['total_batches']} successful")
+
+                # Verify cart contents after all batches
+                expected_sets = self.stats.get("total_sets", 0)
+                if expected_sets > 0:
+                    self.verify_cart_contents(expected_sets)
+
                 return True
             else:
                 logger.error("❌ No batches were processed successfully")
@@ -543,6 +549,164 @@ class CompleteTotoAutomation:
             logger.error(f"❌ Error processing batch {batch_number}: {e}")
             return False
     
+    def verify_cart_contents(self, expected_sets: int) -> bool:
+        """
+        Navigate to the cart page and verify the number of sets matches expected.
+
+        Args:
+            expected_sets: Expected total number of sets in the cart
+
+        Returns:
+            bool: True if cart contents match expected, False otherwise
+        """
+        try:
+            logger.info("=" * 60)
+            logger.info("🛒 CART VERIFICATION: Checking actual cart contents...")
+            logger.info("=" * 60)
+
+            assert self.webdriver_manager is not None
+            driver = self.webdriver_manager.driver
+            assert driver is not None
+
+            # Navigate to cart page
+            cart_url = "https://store.toto-dream.com/dcs/subos/screen/ps02/spsl006/PGSPSL00601InitShopCart.form"
+            current_url = driver.current_url
+
+            # If not already on cart page, navigate there
+            if "PGSPSL00601" not in current_url:
+                logger.info(f"🔄 Navigating to cart page: {cart_url}")
+                driver.get(cart_url)
+                try:
+                    WebDriverWait(driver, 10).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
+                except Exception:
+                    pass
+
+            logger.info(f"📍 Cart page URL: {driver.current_url}")
+            logger.info(f"📍 Cart page title: {driver.title}")
+
+            # Try to extract cart information from the page
+            cart_info = self._extract_cart_info(driver)
+
+            if cart_info:
+                actual_sets = cart_info.get("total_sets", 0)
+                total_amount = cart_info.get("total_amount", "不明")
+                items = cart_info.get("items", [])
+
+                logger.info(f"🛒 Cart contents:")
+                for item in items:
+                    logger.info(f"  - {item}")
+                logger.info(f"🛒 Total sets in cart: {actual_sets}")
+                logger.info(f"💰 Total amount: {total_amount}")
+                logger.info(f"📊 Expected sets: {expected_sets}")
+
+                if actual_sets == expected_sets:
+                    logger.info(f"✅ CART VERIFIED: {actual_sets} sets match expected {expected_sets}")
+                    self.stats["cart_verified"] = True
+                    self.stats["cart_sets"] = actual_sets
+                    self.stats["cart_amount"] = str(total_amount)
+                    return True
+                elif actual_sets > 0:
+                    logger.warning(f"⚠️ CART MISMATCH: Found {actual_sets} sets, expected {expected_sets}")
+                    self.stats["cart_verified"] = False
+                    self.stats["cart_sets"] = actual_sets
+                    self.stats["cart_amount"] = str(total_amount)
+                    return False
+                else:
+                    logger.warning("⚠️ Could not determine exact set count from cart page")
+                    self.stats["cart_verified"] = False
+                    return False
+            else:
+                logger.warning("⚠️ Could not extract cart information")
+                self.stats["cart_verified"] = False
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Cart verification failed: {e}")
+            self.stats["cart_verified"] = False
+            return False
+
+    def _extract_cart_info(self, driver) -> Optional[Dict]:
+        """
+        Extract cart information (sets count, amount) from the cart page.
+
+        Returns:
+            Dict with keys: total_sets, total_amount, items
+        """
+        import re
+
+        try:
+            page_source = driver.page_source
+            cart_info: Dict = {"total_sets": 0, "total_amount": "不明", "items": []}
+
+            # Strategy 1: Look for toto items with set counts (口数)
+            # Common patterns: "10口", "5口" etc.
+            kuchi_elements = driver.find_elements(By.XPATH,
+                "//*[contains(text(), '口')]")
+
+            total_sets = 0
+            for elem in kuchi_elements:
+                text = elem.text.strip()
+                if not text:
+                    continue
+                # Match patterns like "10口", "5口"
+                match = re.search(r'(\d+)\s*口', text)
+                if match:
+                    sets = int(match.group(1))
+                    total_sets += sets
+                    cart_info["items"].append(f"{text}")
+                    logger.info(f"  🔍 Found set count: {sets}口 in '{text}'")
+
+            if total_sets > 0:
+                cart_info["total_sets"] = total_sets
+
+            # Strategy 2: Look for total amount (金額)
+            # Common patterns: "¥1,000", "1,000円", "合計" etc.
+            amount_patterns = [
+                r'合計[^\d]*?(\d[\d,]+)\s*円',
+                r'(\d[\d,]+)\s*円',
+                r'¥\s*(\d[\d,]+)',
+            ]
+
+            for pattern in amount_patterns:
+                match = re.search(pattern, page_source)
+                if match:
+                    amount = match.group(1)
+                    cart_info["total_amount"] = f"{amount}円"
+                    logger.info(f"  🔍 Found amount: {amount}円")
+                    break
+
+            # Strategy 3: Look for specific toto round info
+            round_elements = driver.find_elements(By.XPATH,
+                "//*[contains(text(), '第') and contains(text(), '回')]")
+            for elem in round_elements:
+                text = elem.text.strip()
+                if text and 'toto' in page_source[max(0, page_source.find(text)-100):page_source.find(text)+100].lower():
+                    if text not in [item for item in cart_info["items"]]:
+                        cart_info["items"].append(f"ラウンド: {text}")
+
+            # Strategy 4: Count table rows that look like cart items
+            if total_sets == 0:
+                # Try counting rows in cart table
+                cart_rows = driver.find_elements(By.CSS_SELECTOR,
+                    "table tr, .cart-item, *[class*='cart'] tr, *[class*='item']")
+                logger.info(f"  🔍 Found {len(cart_rows)} potential cart rows")
+
+            # Take screenshot for manual verification
+            try:
+                screenshot_path = f"logs/cart_verification_{int(time.time())}.png"
+                driver.save_screenshot(screenshot_path)
+                logger.info(f"📸 Cart verification screenshot: {screenshot_path}")
+            except Exception:
+                pass
+
+            return cart_info
+
+        except Exception as e:
+            logger.error(f"Error extracting cart info: {e}")
+            return None
+
     def _log_final_summary(self):
         """Log final automation summary"""
         # Store as int to satisfy strict typing of stats dict
@@ -566,6 +730,14 @@ class CompleteTotoAutomation:
             rate = self.stats["total_sets"] / duration
             logger.info(f"🚀 Processing Rate: {rate:.2f} sets/second")
         
+        # Cart verification results
+        if "cart_verified" in self.stats:
+            if self.stats["cart_verified"]:
+                logger.info(f"🛒 Cart Verified: ✅ {self.stats.get('cart_sets', '?')} sets ({self.stats.get('cart_amount', '不明')})")
+            else:
+                cart_sets = self.stats.get("cart_sets", "?")
+                logger.warning(f"🛒 Cart Verified: ❌ Expected {self.stats['total_sets']} sets, found {cart_sets}")
+
         if self.stats["successful_batches"] > 0:
             logger.info("=" * 60)
             logger.info("🎉 AUTOMATION COMPLETED SUCCESSFULLY! 🎉")

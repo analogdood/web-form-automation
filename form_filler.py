@@ -747,11 +747,17 @@ class FormFiller:
                                     element.click()
                                     logger.info(f"✅ Clicked confirmation button: '{element_text}'")
 
-                                    # Wait for page transition with dynamic check
+                                    # Wait for URL change first (page transition)
+                                    try:
+                                        WebDriverWait(self.driver, 3, poll_frequency=0.1).until(
+                                            lambda d: d.current_url != current_url
+                                        )
+                                    except:
+                                        pass
+                                    # Then wait for page to fully load
                                     try:
                                         WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
-                                            lambda d: d.current_url != current_url or
-                                                    d.execute_script("return document.readyState") == "complete"
+                                            lambda d: d.execute_script("return document.readyState") == "complete"
                                         )
                                     except:
                                         pass
