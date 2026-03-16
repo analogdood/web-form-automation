@@ -544,25 +544,8 @@ class FormFiller:
                 
                 # Handle confirmation dialog
                 if self._handle_confirmation_dialog():
-                    logger.info("Form submitted successfully with cart button")
-                    
-                    # Check if we're redirected to confirmation page
-                    current_url = self.driver.current_url
-                    if "vote/confirm" in current_url or "index.html" in current_url:
-                        logger.info("✅ Redirected to confirmation/result page - cart addition successful")
-                        # Handle navigation from confirmation page
-                        if self._handle_cart_page_navigation():
-                            return True
-                        else:
-                            logger.warning("Failed to navigate back from confirmation page")
-                            return False
-                    
-                    # Check if we're on cart page and need to go back
-                    if self._handle_cart_page_navigation():
-                        return True
-                    else:
-                        logger.warning("Failed to navigate back from cart page")
-                        return False
+                    logger.info("✅ Form submitted successfully - staying on current page for multi-batch navigation")
+                    return True
                 else:
                     logger.warning("Cart button clicked but confirmation dialog failed")
                     return False
@@ -875,22 +858,9 @@ class FormFiller:
                 if any(keyword in new_url.lower() for keyword in ['confirm', 'result', 'cart', 'complete', 'success']):
                     logger.info("✅ New window appears to be confirmation/result page")
                 
-                # Close the new window and return to original
-                logger.info("Closing new window and returning to original voting page...")
-                self.driver.close()
-                self.driver.switch_to.window(original_window)
-                
-                # Wait a moment for focus to return
-                time.sleep(2)
-                
-                logger.info("✅ Returned to original voting page window")
-                
-                # Check if we're still on voting page
-                current_url = self.driver.current_url
-                if "PGSPSL00001MoveSingleVoteSheet.form" in current_url:
-                    logger.info("✅ Successfully back on voting page - ready for next batch")
-                else:
-                    logger.warning(f"Not on voting page: {current_url}")
+                # Stay on new window (cart completion page) for multi-batch navigation
+                # Do NOT close and go back to original voting form - that would break multi-batch flow
+                logger.info("✅ Staying on new window (cart completion page) for next batch navigation")
                     
             else:
                 logger.info("No new windows opened")

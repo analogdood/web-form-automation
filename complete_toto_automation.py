@@ -495,27 +495,13 @@ class CompleteTotoAutomation:
                     current_url = ""
 
                 if "PGSPSL00001MoveSingleVoteSheet" not in current_url:
-                    # Try cart-page guided navigation first (preferred)
-                    try:
-                        if self.form_filler and hasattr(self.form_filler, "_handle_cart_page_navigation") and self.form_filler._handle_cart_page_navigation():
-                            logger.info("✅ Returned to single voting page via cart navigation")
-                        else:
-                            logger.info("ℹ️ Cart navigation did not succeed; falling back to round link → シングル")
-                            # Fallback: existing method (round link then single)
-                            if not (self.round_selector and self.round_selector.click_round_link_on_addition_page()):
-                                logger.error("❌ Failed to click round link on addition page")
-                                return False
-                            if not (self.round_selector and self.round_selector.click_single_button()):
-                                logger.error("❌ Failed to click single button")
-                                return False
-                    except Exception as nav_err:
-                        logger.warning(f"Cart navigation attempt failed: {nav_err}. Falling back to round link → シングル")
-                        if not (self.round_selector and self.round_selector.click_round_link_on_addition_page()):
-                            logger.error("❌ Failed to click round link on addition page")
-                            return False
-                        if not (self.round_selector and self.round_selector.click_single_button()):
-                            logger.error("❌ Failed to click single button")
-                            return False
+                    # Must go: totoの投票を追加する → 第XXXX回 → シングル (to ensure correct round)
+                    if not (self.round_selector and self.round_selector.click_round_link_on_addition_page()):
+                        logger.error("❌ Failed to click round link on addition page")
+                        return False
+                    if not (self.round_selector and self.round_selector.click_single_button()):
+                        logger.error("❌ Failed to click single button")
+                        return False
             
             # Fill form with batch data
             logger.info("📝 Filling voting form...")
@@ -541,14 +527,13 @@ class CompleteTotoAutomation:
                 except Exception as alert_error:
                     logger.debug(f"No alerts to handle: {alert_error}")
             
-            # If more batches remain, proactively return via cart page to ensure additive behavior
+            # If more batches remain, navigate to voting page for next batch
             if batch_number < total_batches:
-                logger.info("🔄 Preparing for next batch: returning via cart page's 'totoの投票を追加する'...")
-                try:
-                    if not (self.form_filler and hasattr(self.form_filler, "_handle_cart_page_navigation") and self.form_filler._handle_cart_page_navigation()):
-                        logger.warning("Could not return via cart navigation now; next loop will attempt recovery")
-                except Exception as post_nav_err:
-                    logger.debug(f"Post-submit cart navigation error: {post_nav_err}")
+                logger.info("🔄 Preparing for next batch: totoの投票を追加する → 第XXXX回 → シングル...")
+                if not (self.round_selector and self.round_selector.click_round_link_on_addition_page()):
+                    logger.warning("⚠️ Navigation for next batch failed; will retry at batch start")
+                elif not (self.round_selector and self.round_selector.click_single_button()):
+                    logger.warning("⚠️ シングル click failed; will retry at batch start")
             else:
                 logger.info("🏁 Last batch completed - staying on current page")
             

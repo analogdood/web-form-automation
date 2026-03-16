@@ -478,10 +478,17 @@ class TotoRoundSelector:
                             current_url_before = self.driver.current_url
                             element.click()
                             logger.info("🚀 Clicked 'totoの投票を追加する' button successfully!")
-                            # Wait for navigation or DOM readiness
+                            # Wait for URL change (navigation must happen first)
                             try:
                                 WebDriverWait(self.driver, 10).until(
-                                    lambda d: d.current_url != current_url_before or d.execute_script("return document.readyState") in ("interactive", "complete")
+                                    lambda d: d.current_url != current_url_before
+                                )
+                            except Exception:
+                                pass
+                            # Then wait for page to be fully loaded
+                            try:
+                                WebDriverWait(self.driver, 5).until(
+                                    lambda d: d.execute_script("return document.readyState") == "complete"
                                 )
                             except Exception:
                                 pass
