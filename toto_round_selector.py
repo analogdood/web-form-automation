@@ -12,6 +12,13 @@ from typing import List, Dict, Optional, Tuple
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    TimeoutException,
+    ElementClickInterceptedException,
+    StaleElementReferenceException,
+    WebDriverException,
+)
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -44,14 +51,8 @@ class TotoRoundSelector:
                 from web_driver_manager import WebDriverManager  # avoid cycle at import time
                 # If driver is actually a WebDriver, probe current_url; on failure, we let retry below handle
                 _ = self.driver.current_url  # probe access
-            except Exception:
-                # Attempt a light recovery via a helper if available in context
-                try:
-                    # In most code paths, driver comes from WebDriverManager; here we cannot access it directly
-                    # So we just proceed; the outer automation may call restart when needed
-                    logger.debug("Driver session probe failed; proceeding with navigation attempts")
-                except Exception:
-                    pass
+            except WebDriverException as e:
+                logger.debug(f"Driver session probe failed: {e}; proceeding with navigation attempts")
             attempts = 0
             max_attempts = 3
             timeout = getattr(Config, "WEBDRIVER_TIMEOUT", 10)
@@ -64,8 +65,8 @@ class TotoRoundSelector:
                         WebDriverWait(self.driver, timeout).until(
                             lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
                         )
-                    except Exception:
-                        pass
+                    except TimeoutException as e:
+                        logger.debug(f"Page readyState wait timed out: {e}")
 
                     current_url = self.driver.current_url or ""
                     logger.info(f"Current URL after navigation: {current_url}")
@@ -74,7 +75,7 @@ class TotoRoundSelector:
                         time.sleep(1)
                         continue
                     return True
-                except Exception as e:
+                except WebDriverException as e:
                     last_err = e
                     logger.warning(f"Start page navigation error (attempt {attempts}/{max_attempts}): {e}")
                     time.sleep(1)
@@ -158,10 +159,10 @@ class TotoRoundSelector:
                                 else:
                                     logger.debug(f"Skipped invalid round link: {link_text} (URL: {href})")
                 
-                except Exception as e:
+                except (NoSuchElementException, StaleElementReferenceException, WebDriverException) as e:
                     logger.debug(f"Pattern {pattern} failed: {e}")
                     continue
-            
+
             # Sort by round number (descending, latest first)
             rounds.sort(key=lambda x: int(x['round_number']), reverse=True)
             
@@ -263,9 +264,9 @@ class TotoRoundSelector:
                 WebDriverWait(self.driver, 10).until(
                     lambda d: d.current_url != current_url
                 )
-            except Exception:
-                pass
-            
+            except TimeoutException as e:
+                logger.debug(f"URL change wait timed out after round click: {e}")
+
             # Store selection for session memory
             self.selected_round = round_info['text']
             self.selected_round_id = round_info['round_number']
@@ -305,10 +306,10 @@ class TotoRoundSelector:
                     logger.error("❌ URL did not change, click may have failed")
                     return False
                 
-        except Exception as e:
+        except (StaleElementReferenceException, WebDriverException) as e:
             logger.error(f"❌ Error clicking round: {e}")
             return False
-    
+
     def get_selected_round_info(self) -> Optional[Dict[str, str]]:
         """
         Get information about the currently selected round
@@ -385,22 +386,22 @@ class TotoRoundSelector:
                                 WebDriverWait(self.driver, 10).until(
                                     lambda d: d.current_url != current_url
                                 )
-                            except Exception:
-                                pass
+                            except TimeoutException as e:
+                                logger.debug(f"URL change wait timed out after voting prediction click: {e}")
 
                             # Verify navigation quickly
                             try:
                                 WebDriverWait(self.driver, 10).until(
                                     EC.element_to_be_clickable((By.ID, "select_single"))
                                 )
-                            except Exception:
+                            except TimeoutException:
                                 # Fallback alternative locators
                                 try:
                                     WebDriverWait(self.driver, 8).until(
                                         EC.element_to_be_clickable((By.XPATH, "//img[@alt='シングル']"))
                                     )
-                                except Exception:
-                                    pass
+                                except TimeoutException as e:
+                                    logger.debug(f"Single button not found after voting prediction: {e}")
 
                             new_url = self.driver.current_url
                             logger.info(f"Navigated to: {new_url}")
@@ -414,10 +415,10 @@ class TotoRoundSelector:
                                 logger.warning("⚠️ '今すぐ投票予想する' succeeded but 'シングル' button failed")
                                 return False
                                 
-                except Exception as e:
+                except (NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException, WebDriverException) as e:
                     logger.debug(f"Selector {selector} failed: {e}")
                     continue
-            
+
             logger.warning("⚠️ Could not find '今すぐ投票予想する' button with any selector")
             return False
             
@@ -447,8 +448,8 @@ class TotoRoundSelector:
                 WebDriverWait(self.driver, 10).until(
                     lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
                 )
-            except Exception:
-                pass
+            except TimeoutException as e:
+                logger.debug(f"Voting addition page readyState wait timed out: {e}")
             logger.info("⏳ Voting addition page ready check completed")
             
             # Get current page info for debugging
@@ -483,20 +484,20 @@ class TotoRoundSelector:
                                 WebDriverWait(self.driver, 10).until(
                                     lambda d: d.current_url != current_url_before
                                 )
-                            except Exception:
-                                pass
+                            except TimeoutException as e:
+                                logger.debug(f"URL change wait timed out after toto add click: {e}")
                             # Then wait for page to be fully loaded
                             try:
                                 WebDriverWait(self.driver, 5).until(
                                     lambda d: d.execute_script("return document.readyState") == "complete"
                                 )
-                            except Exception:
-                                pass
+                            except TimeoutException as e:
+                                logger.debug(f"Page readyState wait timed out after toto add: {e}")
                             toto_add_clicked = True
                             break
                     if toto_add_clicked:
                         break
-                except Exception as e:
+                except (NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException, WebDriverException) as e:
                     logger.debug(f"Toto add selector {selector} failed: {e}")
                     continue
             
@@ -508,9 +509,9 @@ class TotoRoundSelector:
                 WebDriverWait(self.driver, 8).until(
                     lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
                 )
-            except Exception:
-                pass
-            
+            except TimeoutException as e:
+                logger.debug(f"Page readyState wait timed out: {e}")
+
             # First, let's find ALL links with round numbers to debug
             logger.info("🔍 Debug: Finding all round-related links on page...")
             debug_selectors = [
@@ -536,9 +537,9 @@ class TotoRoundSelector:
                                     'href': href,
                                     'element': element
                                 })
-                except Exception as e:
+                except (NoSuchElementException, StaleElementReferenceException, WebDriverException) as e:
                     logger.debug(f"Debug selector {debug_selector} failed: {e}")
-            
+
             logger.info(f"Found {len(all_round_links)} round-related links:")
             for i, link in enumerate(all_round_links):
                 logger.info(f"  {i+1}. Text: '{link['text']}', onclick: '{link['onclick'][:50]}...'")
@@ -575,13 +576,13 @@ class TotoRoundSelector:
                             WebDriverWait(self.driver, 10).until(
                                 lambda d: d.current_url != current_url_before
                             )
-                        except Exception:
-                            pass
+                        except TimeoutException as e:
+                            logger.debug(f"URL change wait timed out after exact match click: {e}")
                         # Verify navigation
                         new_url = self.driver.current_url
                         logger.info(f"Navigated to: {new_url}")
                         return True
-                    except Exception as click_error:
+                    except (ElementClickInterceptedException, StaleElementReferenceException, WebDriverException) as click_error:
                         logger.warning(f"Failed to click exact match: {click_error}")
             
             # Try selectors if exact match failed
@@ -612,14 +613,14 @@ class TotoRoundSelector:
                                 WebDriverWait(self.driver, 10).until(
                                     lambda d: d.current_url != current_url_before
                                 )
-                            except Exception:
-                                pass
+                            except TimeoutException as e:
+                                logger.debug(f"URL change wait timed out after round link click: {e}")
                             # Verify navigation
                             new_url = self.driver.current_url
                             logger.info(f"Navigated to: {new_url}")
                             return True
-                                
-                except Exception as e:
+
+                except (NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException, WebDriverException) as e:
                     logger.debug(f"Selector {selector} failed: {e}")
                     continue
             
@@ -632,8 +633,8 @@ class TotoRoundSelector:
                 screenshot_name = f"debug_round_link_{int(time_module.time())}.png"
                 self.driver.save_screenshot(screenshot_name)
                 logger.info(f"📸 Screenshot saved: {screenshot_name}")
-            except:
-                pass
+            except WebDriverException as e:
+                logger.debug(f"Failed to save debug screenshot: {e}")
             
             return False
             
@@ -694,8 +695,8 @@ class TotoRoundSelector:
                                 WebDriverWait(self.driver, 12).until(
                                     lambda d: d.current_url != current_url_before
                                 )
-                            except Exception:
-                                pass
+                            except TimeoutException as e:
+                                logger.debug(f"URL change wait timed out after single button click: {e}")
                             # Verify navigation to single voting page
                             new_url = self.driver.current_url
                             logger.info(f"Navigated to: {new_url}")
@@ -708,10 +709,10 @@ class TotoRoundSelector:
                                 # Still consider success if URL changed
                                 return True
                                 
-                except Exception as e:
+                except (NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException, WebDriverException) as e:
                     logger.debug(f"Selector {selector} failed: {e}")
                     continue
-            
+
             logger.warning("⚠️ Could not find 'シングル' button with any selector")
             return False
             
@@ -760,8 +761,8 @@ class TotoRoundSelector:
                 WebDriverWait(self.driver, 5, poll_frequency=0.1).until(
                     lambda d: d.execute_script("return document.readyState") == "complete"
                 )
-            except:
-                pass
+            except TimeoutException as e:
+                logger.debug(f"Page readyState wait timed out before voting prediction: {e}")
             
             # Step 5: Click voting prediction button (this now automatically clicks single too)
             logger.info("📍 Step 5: Click '今すぐ投票予想する' button (will auto-click 'シングル' too)")
@@ -839,9 +840,10 @@ class TotoRoundSelector:
                     if modal_found:
                         break
                         
-                except Exception:
+                except (NoSuchElementException, StaleElementReferenceException, WebDriverException) as e:
+                    logger.debug(f"Modal selector check failed: {e}")
                     continue
-            
+
             if modal_found:
                 logger.info("🔧 Attempting to close modal dialog...")
                 
@@ -862,12 +864,12 @@ class TotoRoundSelector:
                                     WebDriverWait(self.driver, 1, poll_frequency=0.1).until(
                                         lambda d: not close_element.is_displayed()
                                     )
-                                except:
-                                    pass
+                                except (TimeoutException, StaleElementReferenceException) as e:
+                                    logger.debug(f"Modal close wait timed out: {e}")
                                 logger.info("✅ Modal dialog closed")
                                 return
                                 
-                    except Exception as e:
+                    except (NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException, WebDriverException) as e:
                         logger.debug(f"Close button selector failed: {close_selector}, {e}")
                         continue
                 
@@ -877,7 +879,7 @@ class TotoRoundSelector:
                     logger.info("🔧 Trying to close modal with Escape key...")
                     self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
                     logger.info("✅ Sent Escape key to close modal")
-                except Exception as e:
+                except (NoSuchElementException, WebDriverException) as e:
                     logger.debug(f"Escape key failed: {e}")
 
                 # Try clicking backdrop to close modal
@@ -889,7 +891,7 @@ class TotoRoundSelector:
                             backdrop.click()
                             logger.info("✅ Clicked modal backdrop")
                             return
-                except Exception as e:
+                except (NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException, WebDriverException) as e:
                     logger.debug(f"Backdrop click failed: {e}")
             else:
                 logger.debug("✅ No modal dialogs found")
@@ -914,9 +916,9 @@ class TotoRoundSelector:
                 element.click()
                 logger.info("✅ Direct click successful")
                 return True
-            except Exception as e:
+            except (ElementClickInterceptedException, StaleElementReferenceException, WebDriverException) as e:
                 logger.debug(f"Direct click failed: {e}")
-            
+
             # Strategy 2: Scroll into view and click
             try:
                 logger.debug("🔧 Trying scroll into view and click...")
@@ -924,18 +926,18 @@ class TotoRoundSelector:
                 element.click()
                 logger.info("✅ Scroll and click successful")
                 return True
-            except Exception as e:
+            except (ElementClickInterceptedException, StaleElementReferenceException, WebDriverException) as e:
                 logger.debug(f"Scroll and click failed: {e}")
-            
+
             # Strategy 3: JavaScript click
             try:
                 logger.debug("🔧 Trying JavaScript click...")
                 self.driver.execute_script("arguments[0].click();", element)
                 logger.info("✅ JavaScript click successful")
                 return True
-            except Exception as e:
+            except (StaleElementReferenceException, WebDriverException) as e:
                 logger.debug(f"JavaScript click failed: {e}")
-            
+
             # Strategy 4: ActionChains click
             try:
                 from selenium.webdriver.common.action_chains import ActionChains
@@ -943,9 +945,9 @@ class TotoRoundSelector:
                 ActionChains(self.driver).move_to_element(element).click().perform()
                 logger.info("✅ ActionChains click successful")
                 return True
-            except Exception as e:
+            except (ElementClickInterceptedException, StaleElementReferenceException, WebDriverException) as e:
                 logger.debug(f"ActionChains click failed: {e}")
-            
+
             # Strategy 5: Click at coordinates
             try:
                 logger.debug("🔧 Trying coordinate click...")
@@ -965,7 +967,7 @@ class TotoRoundSelector:
                 """, element)
                 logger.info("✅ Coordinate click successful")
                 return True
-            except Exception as e:
+            except (StaleElementReferenceException, WebDriverException) as e:
                 logger.debug(f"Coordinate click failed: {e}")
             
             logger.error("❌ All click strategies failed")

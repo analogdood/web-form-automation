@@ -17,6 +17,14 @@ from data_handler import DataHandler
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    TimeoutException,
+    ElementClickInterceptedException,
+    StaleElementReferenceException,
+    NoAlertPresentException,
+    WebDriverException,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +117,8 @@ class CompleteTotoAutomation:
             # 事前に邪魔なポップアップは軽く掃除
             try:
                 wm.close_unexpected_popups()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Pre-login popup cleanup skipped: {e}")
 
             logger.info("🔐 ログインを開始します...")
             driver.get(LOGIN_URL)
@@ -124,20 +132,20 @@ class CompleteTotoAutomation:
             pwd = None
             try:
                 uid = driver.find_element(By.ID, "memberId")
-            except Exception:
+            except NoSuchElementException:
                 # 予備: name="idOrNicknam"
                 try:
                     uid = driver.find_element(By.NAME, "idOrNicknam")
-                except Exception:
+                except NoSuchElementException:
                     uid = None
 
             try:
                 pwd = driver.find_element(By.ID, "pcpass")
-            except Exception:
+            except NoSuchElementException:
                 # 予備: name="passwd"
                 try:
                     pwd = driver.find_element(By.NAME, "passwd")
-                except Exception:
+                except NoSuchElementException:
                     pwd = None
 
             if not uid or not pwd:
@@ -165,12 +173,14 @@ class CompleteTotoAutomation:
                         tag = btn.tag_name.lower()
                         if tag == "span":
                             btn = btn.find_element(By.XPATH, "./ancestor::button|./ancestor::a")
-                    except Exception:
-                        pass
+                    except (NoSuchElementException, StaleElementReferenceException) as e:
+                        logger.debug(f"Could not find ancestor button/link for span: {e}")
                     btn.click()
                     clicked = True
                     break
-                except Exception:
+                except (TimeoutException, ElementClickInterceptedException, NoSuchElementException,
+                        StaleElementReferenceException) as e:
+                    logger.debug(f"Login button candidate ({sel}) failed: {e}")
                     continue
 
             if not clicked:
@@ -178,8 +188,8 @@ class CompleteTotoAutomation:
                 try:
                     pwd.submit()
                     clicked = True
-                except Exception:
-                    pass
+                except WebDriverException as e:
+                    logger.debug(f"Form submit fallback failed: {e}")
 
             if not clicked:
                 logger.warning("ログインボタンのクリックに失敗しました")
@@ -307,8 +317,8 @@ class CompleteTotoAutomation:
             if self.webdriver_manager:
                 try:
                     self.webdriver_manager.close_unexpected_popups(quick=True)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Popup cleanup skipped during navigation: {e}")
 
             # Ensure components are initialized (helps static analyzers and avoids None access)
             assert self.round_selector is not None, "Round selector not initialized"
@@ -371,8 +381,8 @@ class CompleteTotoAutomation:
                 if self.webdriver_manager:
                     try:
                         self.webdriver_manager.close_unexpected_popups(quick=True)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Popup cleanup after voting button skipped: {e}")
 
                 self._maybe_login()
                 
@@ -388,8 +398,8 @@ class CompleteTotoAutomation:
                 if self.webdriver_manager:
                     try:
                         self.webdriver_manager.close_unexpected_popups(quick=True)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Popup cleanup after auto-navigation skipped: {e}")
 
                 self._maybe_login()
             
@@ -487,8 +497,8 @@ class CompleteTotoAutomation:
             if self.webdriver_manager:
                 try:
                     self.webdriver_manager.close_unexpected_popups(quick=True)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Popup cleanup at batch start skipped: {e}")
 
             # For batches after the first, ensure we're on the single voting page.
             # Prefer returning via the cart page's "totoの投票を追加する" to guarantee additive behavior.
@@ -497,7 +507,8 @@ class CompleteTotoAutomation:
                 try:
                     drv2 = getattr(self.webdriver_manager, "driver", None)
                     current_url = getattr(drv2, "current_url", "")
-                except Exception:
+                except WebDriverException as e:
+                    logger.debug(f"Could not read current URL: {e}")
                     current_url = ""
 
                 if "PGSPSL00001MoveSingleVoteSheet" not in current_url:
@@ -580,8 +591,8 @@ class CompleteTotoAutomation:
                     WebDriverWait(driver, 10).until(
                         lambda d: d.execute_script("return document.readyState") == "complete"
                     )
-                except Exception:
-                    pass
+                except TimeoutException as e:
+                    logger.debug(f"Cart page load wait timed out: {e}")
 
             logger.info(f"📍 Cart page URL: {driver.current_url}")
             logger.info(f"📍 Cart page title: {driver.title}")
@@ -698,8 +709,8 @@ class CompleteTotoAutomation:
                 screenshot_path = f"logs/cart_verification_{int(time.time())}.png"
                 driver.save_screenshot(screenshot_path)
                 logger.info(f"📸 Cart verification screenshot: {screenshot_path}")
-            except Exception:
-                pass
+            except WebDriverException as e:
+                logger.debug(f"Could not save cart screenshot: {e}")
 
             return cart_info
 
@@ -817,7 +828,8 @@ class CompleteTotoAutomation:
                     # Domain must match or be parent; Selenium may adjust automatically
                     vdrv.add_cookie(cd)
                     imported += 1
-                except Exception:
+                except WebDriverException as e:
+                    logger.debug(f"Could not import cookie: {e}")
                     continue
             logger.info(f"Imported {imported} cookies into visible browser")
 
@@ -829,8 +841,8 @@ class CompleteTotoAutomation:
             if self.username and self.password:
                 try:
                     visible.try_login_if_present(self.username, self.password)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Auto-login in visible browser skipped: {e}")
 
             # Keep visible browser open; do not close here
         except Exception as e:

@@ -11,6 +11,10 @@ from selenium.common.exceptions import (
     NoSuchElementException,
     ElementNotInteractableException,
     ElementClickInterceptedException,
+    StaleElementReferenceException,
+    NoAlertPresentException,
+    UnexpectedAlertPresentException,
+    WebDriverException,
 )
 from typing import List, Dict, Optional
 from config import Config
@@ -90,12 +94,143 @@ class FormFiller:
                 logger.info(f"Successfully filled game {game_index + 1}")
             
             logger.info("All games filled successfully")
+
+            # Verify all selections before returning
+            verified, mismatches = self.verify_form_input(batch_data)
+            if not verified:
+                logger.warning(f"Verification found {len(mismatches)} mismatches, attempting correction...")
+                corrected = self._correct_mismatches(mismatches, batch_data)
+                if not corrected:
+                    logger.error("Form verification failed after correction attempt")
+                    return False
+                logger.info("All mismatches corrected successfully")
+            else:
+                logger.info("Form verification passed: all selections match CSV data")
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error filling voting form: {e}")
             return False
     
+    def verify_form_input(self, batch_data: List[List[int]]) -> tuple:
+        """
+        Verify that all form selections match the expected CSV data.
+        Reads back each checkbox's selected state and compares with batch_data.
+
+        Returns:
+            tuple: (all_match: bool, mismatches: List[dict])
+        """
+        mismatches = []
+        num_games = Config.MAX_GAMES_PER_SET
+        num_sets = min(len(batch_data), Config.MAX_SETS_PER_BATCH)
+
+        logger.info(f"Verifying form input: {num_games} games × {num_sets} sets")
+
+        for game_index in range(num_games):
+            for set_index in range(num_sets):
+                csv_value = batch_data[set_index][game_index]
+
+                # CSV→vote conversion (same as fill_voting_form)
+                if csv_value == 1:
+                    expected_vote = 0
+                elif csv_value == 0:
+                    expected_vote = 1
+                elif csv_value == 2:
+                    expected_vote = 2
+                else:
+                    mismatches.append({
+                        'game': game_index, 'set': set_index,
+                        'expected_csv': csv_value, 'expected_vote': None,
+                        'actual_vote': None, 'error': 'invalid CSV value'
+                    })
+                    continue
+
+                # Check if the expected checkbox is selected
+                expected_name = self._get_checkbox_name(game_index, set_index, expected_vote)
+                try:
+                    expected_elem = self._find_checkbox_by_name(expected_name)
+                    if expected_elem and expected_elem.is_selected():
+                        continue  # Match confirmed
+
+                    # Expected not selected — find what IS selected
+                    actual_vote = None
+                    for v in [0, 1, 2]:
+                        if v == expected_vote:
+                            continue
+                        name = self._get_checkbox_name(game_index, set_index, v)
+                        try:
+                            elem = self._find_checkbox_by_name(name)
+                            if elem and elem.is_selected():
+                                actual_vote = v
+                                break
+                        except (NoSuchElementException, StaleElementReferenceException):
+                            continue
+
+                    mismatches.append({
+                        'game': game_index, 'set': set_index,
+                        'expected_csv': csv_value, 'expected_vote': expected_vote,
+                        'actual_vote': actual_vote,
+                        'error': 'selection mismatch'
+                    })
+                    logger.warning(
+                        f"Mismatch: game {game_index+1}, set {set_index+1} — "
+                        f"expected vote={expected_vote} (CSV={csv_value}), "
+                        f"actual vote={actual_vote}"
+                    )
+
+                except (StaleElementReferenceException, WebDriverException) as e:
+                    mismatches.append({
+                        'game': game_index, 'set': set_index,
+                        'expected_csv': csv_value, 'expected_vote': expected_vote,
+                        'actual_vote': None, 'error': str(e)
+                    })
+                    logger.warning(f"Verify error at game {game_index+1}, set {set_index+1}: {e}")
+
+        if mismatches:
+            logger.warning(f"Verification result: {len(mismatches)} mismatches found out of {num_games * num_sets} checks")
+        else:
+            logger.info(f"Verification result: all {num_games * num_sets} selections confirmed correct")
+
+        return (len(mismatches) == 0, mismatches)
+
+    def _correct_mismatches(self, mismatches: List[dict], batch_data: List[List[int]]) -> bool:
+        """
+        Attempt to correct mismatched selections by re-clicking the correct checkboxes.
+
+        Returns:
+            bool: True if all mismatches were corrected
+        """
+        logger.info(f"Attempting to correct {len(mismatches)} mismatches")
+
+        for m in mismatches:
+            game_index = m['game']
+            set_index = m['set']
+            expected_vote = m['expected_vote']
+
+            if expected_vote is None:
+                logger.error(f"Cannot correct game {game_index+1}, set {set_index+1}: invalid data")
+                return False
+
+            logger.info(f"Re-clicking game {game_index+1}, set {set_index+1}, vote={expected_vote}")
+            success = self._click_checkbox(game_index, set_index, expected_vote)
+            if not success:
+                logger.error(f"Correction failed for game {game_index+1}, set {set_index+1}")
+                return False
+
+        # Re-verify after corrections
+        verified, remaining = self.verify_form_input(batch_data)
+        if not verified:
+            logger.error(f"Still {len(remaining)} mismatches after correction")
+            for m in remaining:
+                logger.error(
+                    f"  game {m['game']+1}, set {m['set']+1}: "
+                    f"expected={m['expected_vote']}, actual={m['actual_vote']}"
+                )
+            return False
+
+        return True
+
     def _fill_single_set(self, set_data: List[int], set_index: int) -> bool:
         """
         Fill a single set of voting data
@@ -245,7 +380,7 @@ class FormFiller:
                     # Scroll element into view first (no sleep, scroll is instant)
                     try:
                         self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", checkbox_element)
-                    except Exception as e:
+                    except WebDriverException as e:
                         logger.debug(f"Scroll failed for {checkbox_name}: {e}")
 
                     # Get optimal timeout from adaptive wait manager
@@ -309,7 +444,8 @@ class FormFiller:
                             logger.warning(f"Last resort click intercepted for {checkbox_name} (attempt {attempt+1}/{max_retries})")
                             self._dismiss_popups_and_overlays_quick()
                             continue
-                        except:
+                        except (TimeoutException, StaleElementReferenceException, WebDriverException) as e:
+                            logger.debug(f"Last resort click failed for {checkbox_name}: {e}")
                             if attempt < max_retries - 1:
                                 continue
                             return False
@@ -384,8 +520,8 @@ class FormFiller:
                     self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                     time.sleep(1)
                     logger.info("Fallback scroll completed")
-                except:
-                    pass
+                except WebDriverException as e:
+                    logger.debug(f"Fallback scroll also failed: {e}")
             
             # Debug: Find all potential clickable elements including links and divs
             all_clickables = []
@@ -422,8 +558,8 @@ class FormFiller:
                     if element_id not in seen_elements:
                         unique_clickables.append(element)
                         seen_elements.add(element_id)
-                except:
-                    pass
+                except StaleElementReferenceException as e:
+                    logger.debug(f"Stale element during dedup: {e}")
             
             logger.info(f"🔍 Found {len(unique_clickables)} clickable elements, filtering for cart buttons...")
 
@@ -501,21 +637,21 @@ class FormFiller:
                     alert.accept()
                     logger.info("✅ Immediate alert accepted successfully")
                     time.sleep(2)
-                    
+
                     # Check if new window opened
                     self._handle_new_window_after_cart_addition()
-                    
+
                     # Check if we're redirected to confirmation page
                     current_url = self.driver.current_url
                     if "vote/confirm" in current_url or "index.html" in current_url:
                         logger.info("✅ Redirected to confirmation/result page after alert - cart addition successful")
                         return True
-                    
+
                     logger.info("✅ Alert handled, form submission successful")
                     return True
-                    
-                except Exception as e:
-                    logger.debug(f"No immediate alert found: {e}")
+
+                except NoAlertPresentException:
+                    logger.debug("No immediate alert found")
                     
                 # Wait a moment and check if anything happened
                 time.sleep(2)
@@ -538,8 +674,8 @@ class FormFiller:
                             alert.accept()
                             logger.info("✅ Alert accepted during status check")
                             return True
-                        except:
-                            pass
+                        except NoAlertPresentException as e:
+                            logger.debug(f"Alert disappeared before handling: {e}")
                     return False
                 
                 # Handle confirmation dialog
@@ -555,10 +691,10 @@ class FormFiller:
             # Clean one more time before trying submit
             try:
                 self._dismiss_popups_and_overlays_quick()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Pre-submit popup dismissal failed: {e}")
             success = self.driver_manager.click_element_safe(
-                Config.SELECTORS['submit_button'], 
+                Config.SELECTORS['submit_button'],
                 "submit button"
             )
             
@@ -586,8 +722,8 @@ class FormFiller:
         try:
             # Use driver manager quick popup closer (alerts, close buttons, limited iframes)
             handled += self.driver_manager.close_unexpected_popups(max_iframes=3)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"close_unexpected_popups failed: {e}")
 
         # Hide overlay/modals with JS (non-destructive styling overrides)
         try:
@@ -617,8 +753,8 @@ class FormFiller:
             hidden = self.driver.execute_script(js)
             if hidden:
                 handled += int(hidden) if isinstance(hidden, (int, float)) else 0
-        except Exception:
-            pass
+        except WebDriverException as e:
+            logger.debug(f"JS overlay hiding failed: {e}")
 
         return handled
     
@@ -651,13 +787,13 @@ class FormFiller:
                         WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
                             lambda d: d.execute_script("return document.readyState") == "complete"
                         )
-                    except:
-                        pass
+                    except TimeoutException:
+                        logger.debug("Page readyState wait timed out after alert accept")
                     return True
-                except Exception as e:
-                    if attempt < max_attempts - 1:  # Don't log error on last attempt
-                        logger.debug(f"Attempt {attempt + 1}: No alert yet: {e}")
-                        time.sleep(0.3)  # Reduced from 0.5s for faster response
+                except NoAlertPresentException:
+                    if attempt < max_attempts - 1:
+                        logger.debug(f"Attempt {attempt + 1}: No alert yet")
+                        time.sleep(0.3)
                     continue
             
             logger.info("No JavaScript alert found after 10 attempts")
@@ -675,11 +811,11 @@ class FormFiller:
                     WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
                         lambda d: d.execute_script("return document.readyState") == "complete"
                     )
-                except:
-                    pass
+                except TimeoutException:
+                    logger.debug("Page readyState wait timed out after immediate alert")
                 return True
-            except Exception as e:
-                logger.debug(f"No immediate alert: {e}")
+            except NoAlertPresentException:
+                logger.debug("No immediate alert")
             
             # Method 3: Enhanced DOM dialog search with immediate action
             logger.info("Method 3: Enhanced DOM dialog search...")
@@ -752,15 +888,15 @@ class FormFiller:
                                         WebDriverWait(self.driver, 3, poll_frequency=0.1).until(
                                             lambda d: d.current_url != current_url
                                         )
-                                    except:
-                                        pass
+                                    except TimeoutException:
+                                        logger.debug("URL did not change within timeout after confirm click")
                                     # Then wait for page to fully load
                                     try:
                                         WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
                                             lambda d: d.execute_script("return document.readyState") == "complete"
                                         )
-                                    except:
-                                        pass
+                                    except TimeoutException:
+                                        logger.debug("Page readyState wait timed out after confirm click")
 
                                     # Check if URL changed (redirect to result page)
                                     new_url = self.driver.current_url
@@ -792,8 +928,8 @@ class FormFiller:
                     WebDriverWait(self.driver, 1, poll_frequency=0.1).until(
                         lambda d: d.current_url != current_url
                     )
-                except:
-                    pass
+                except TimeoutException:
+                    logger.debug("No page transition after Enter key")
 
                 # Check if URL changed after Enter
                 new_url = self.driver.current_url
@@ -810,8 +946,8 @@ class FormFiller:
                     WebDriverWait(self.driver, 1, poll_frequency=0.1).until(
                         lambda d: d.current_url != current_url
                     )
-                except:
-                    pass
+                except TimeoutException:
+                    logger.debug("No page transition after Space key")
                 
                 return True
             except Exception as e:
@@ -877,8 +1013,8 @@ class FormFiller:
             try:
                 if len(self.driver.window_handles) > 0:
                     self.driver.switch_to.window(self.driver.window_handles[0])
-            except:
-                pass
+            except WebDriverException as e:
+                logger.debug(f"Failed to switch back to original window: {e}")
     
     def _check_browser_alive(self) -> bool:
         """
@@ -1140,8 +1276,8 @@ class FormFiller:
             # Quick cleanup before attempts
             try:
                 self._dismiss_popups_and_overlays_quick()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Quick cleanup before cart click failed: {e}")
 
             # Sort candidates to prioritize true '追加' buttons and known classes, de-prioritize anything with '確認'
             def score_candidate(btn, text: str) -> int:
@@ -1176,13 +1312,13 @@ class FormFiller:
                         # Ensure in view and unobscured
                         try:
                             self.driver.execute_script("arguments[0].scrollIntoView({behavior:'instant',block:'center'});", btn)
-                        except Exception:
-                            pass
+                        except WebDriverException as e:
+                            logger.debug(f"ScrollIntoView failed for candidate {i}: {e}")
                         # One more cleanup right before click
                         try:
                             self._dismiss_popups_and_overlays_quick()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Pre-click cleanup failed for candidate {i}: {e}")
                         try:
                             # Prefer waiting for clickable to avoid intercepted clicks
                             if self.wait:
@@ -1236,8 +1372,8 @@ class FormFiller:
                 try:
                     try:
                         self._dismiss_popups_and_overlays_quick()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Popup dismissal before XPath cart search failed: {e}")
                     elements = self.driver.find_elements(By.XPATH, xpath)
                     for element in elements:
                         if element.is_displayed() and element.is_enabled():
@@ -1249,8 +1385,8 @@ class FormFiller:
                             logger.info(f"Trying XPath cart button: '{element_text}'")
                             try:
                                 self.driver.execute_script("arguments[0].scrollIntoView({behavior:'instant',block:'center'});", element)
-                            except Exception:
-                                pass
+                            except WebDriverException as e:
+                                logger.debug(f"ScrollIntoView failed for XPath element: {e}")
                             element.click()
                             logger.info(f"✅ Successfully clicked XPath cart button: '{element_text}'")
                             time.sleep(1)
@@ -1349,12 +1485,12 @@ class FormFiller:
                 logger.info(f"✅ Found alert during status check: '{alert_text}'")
                 alert.accept()
                 logger.info("✅ Alert accepted during status check")
-                
+
                 # Check if new window opened after alert
                 self._handle_new_window_after_cart_addition()
-                
+
                 return True
-            except:
+            except NoAlertPresentException:
                 # No alert, continue with normal checks
                 pass
             
@@ -1410,7 +1546,7 @@ class FormFiller:
                 alert.accept()  # Accept it immediately
                 logger.info("✅ Alert accepted in status check")
                 return True  # Alert is expected for cart addition
-            except:
+            except NoAlertPresentException:
                 logger.debug("No alert found")
             
             # Check if URL changed (might indicate redirect or success)
@@ -1497,9 +1633,9 @@ class FormFiller:
                                 if checkbox.is_selected():
                                     game_has_selection = True
                                     break
-                            except:
+                            except (NoSuchElementException, StaleElementReferenceException):
                                 continue
-                            
+
                             if game_has_selection:
                                 break
                         
@@ -1696,7 +1832,7 @@ class FormFiller:
                         if len(parts) >= 2:
                             game_index = int(parts[1])
                             game_indices.add(game_index)
-                    except:
+                    except (ValueError, IndexError):
                         pass
             
             sorted_games = sorted(game_indices)
