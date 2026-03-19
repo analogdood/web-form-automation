@@ -578,6 +578,8 @@ class TotoRoundSelector:
                             )
                         except TimeoutException as e:
                             logger.debug(f"URL change wait timed out after exact match click: {e}")
+                        # Close any popup windows opened by onclick
+                        self._close_popup_windows()
                         # Verify navigation
                         new_url = self.driver.current_url
                         logger.info(f"Navigated to: {new_url}")
@@ -615,6 +617,8 @@ class TotoRoundSelector:
                                 )
                             except TimeoutException as e:
                                 logger.debug(f"URL change wait timed out after round link click: {e}")
+                            # Close any popup windows opened by onclick
+                            self._close_popup_windows()
                             # Verify navigation
                             new_url = self.driver.current_url
                             logger.info(f"Navigated to: {new_url}")
@@ -642,6 +646,31 @@ class TotoRoundSelector:
             logger.error(f"❌ Error clicking round link: {e}")
             return False
     
+    def _close_popup_windows(self):
+        """Close any popup windows (e.g. vote-rate info) that were opened by onclick handlers."""
+        try:
+            all_windows = self.driver.window_handles
+            if len(all_windows) <= 1:
+                return
+            current_window = self.driver.current_window_handle
+            popup_keywords = ['popup', 'VoteRate', 'initVoteRate', 'PGSPIN00301']
+            for handle in all_windows:
+                if handle == current_window:
+                    continue
+                try:
+                    self.driver.switch_to.window(handle)
+                    win_url = self.driver.current_url
+                    if any(kw in win_url for kw in popup_keywords):
+                        logger.info(f"🗑️ Closing popup window: {win_url}")
+                        self.driver.close()
+                    else:
+                        logger.debug(f"Keeping extra window: {win_url}")
+                except Exception as e:
+                    logger.debug(f"Error closing popup window: {e}")
+            self.driver.switch_to.window(current_window)
+        except Exception as e:
+            logger.debug(f"Error in _close_popup_windows: {e}")
+
     def click_single_button(self) -> bool:
         """
         Click the 'シングル' (Single) button to go to single voting page

@@ -968,45 +968,54 @@ class FormFiller:
     
     def _handle_new_window_after_cart_addition(self):
         """
-        Handle new window that might open after cart addition
+        Handle new window that might open after cart addition.
+
+        Important: Extra windows may be stale popups (e.g. vote-rate info opened
+        by a round link's onclick during batch transition).  These must be closed
+        so we stay on the correct (original) cart page.
         """
         try:
             logger.info("🔍 Checking for new windows after cart addition...")
-            
+
             # Get all window handles
             all_windows = self.driver.window_handles
             logger.info(f"Found {len(all_windows)} window(s)")
-            
+
             if len(all_windows) > 1:
-                logger.info("✅ New window detected - handling new window")
-                
-                # Switch to the new window (usually the last one)
-                new_window = all_windows[-1]
-                original_window = all_windows[0]
-                
-                logger.info(f"Switching to new window: {new_window}")
-                self.driver.switch_to.window(new_window)
-                
-                # Wait for new window to load
-                time.sleep(3)
-                
-                # Get new window URL and title
-                new_url = self.driver.current_url
-                new_title = self.driver.title
-                logger.info(f"New window URL: {new_url}")
-                logger.info(f"New window title: {new_title}")
-                
-                # Check if it's a confirmation/result page
-                if any(keyword in new_url.lower() for keyword in ['confirm', 'result', 'cart', 'complete', 'success']):
-                    logger.info("✅ New window appears to be confirmation/result page")
-                
-                # Stay on new window (cart completion page) for multi-batch navigation
-                # Do NOT close and go back to original voting form - that would break multi-batch flow
-                logger.info("✅ Staying on new window (cart completion page) for next batch navigation")
-                    
+                logger.info("⚠️ Extra window(s) detected - checking if they are popups...")
+
+                # Remember which window we are currently on (the one that just did the cart add)
+                current_window = self.driver.current_window_handle
+
+                # Inspect every *other* window; close popups, keep cart/confirmation pages
+                popup_keywords = ['popup', 'VoteRate', 'initVoteRate', 'PGSPIN00301']
+
+                for handle in all_windows:
+                    if handle == current_window:
+                        continue
+
+                    try:
+                        self.driver.switch_to.window(handle)
+                        time.sleep(1)
+                        win_url = self.driver.current_url
+                        logger.info(f"  Extra window URL: {win_url}")
+
+                        # If the window is a known popup type, close it
+                        if any(kw in win_url for kw in popup_keywords):
+                            logger.info(f"  🗑️ Closing popup window: {win_url}")
+                            self.driver.close()
+                        else:
+                            logger.info(f"  ℹ️ Non-popup extra window kept open: {win_url}")
+                    except Exception as e:
+                        logger.debug(f"  Error inspecting extra window {handle}: {e}")
+
+                # Switch back to the original window (the cart page)
+                self.driver.switch_to.window(current_window)
+                logger.info(f"✅ Returned to cart window (remaining windows: {len(self.driver.window_handles)})")
+
             else:
                 logger.info("No new windows opened")
-                
+
         except Exception as e:
             logger.error(f"Error handling new window: {e}")
             # Try to return to original window if something went wrong
